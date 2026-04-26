@@ -1,0 +1,84 @@
+# ============================================
+# Docker Compose - Fraude (deploiement magasin)
+# ============================================
+# Cette version utilise des images PRE-CONSTRUITES embarquees dans la cle USB.
+# Elle differe du docker-compose.yml du repo (qui utilise `build:`) :
+#   - image: fraude-fraud-detector:latest  (chargee par load-images.sh au boot)
+#   - pas de pull, pas de build, demarrage en <30 sec apres le 1er load
+#
+# Les 2 services partagent la MEME image (seul le `command:` differe au runtime).
+
+services:
+  # Service principal de detection
+  fraud-detector:
+    image: fraude-fraud-detector:latest
+    container_name: fraud-detector
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./recordings:/opt/fraude/recordings
+      - ./snapshots:/opt/fraude/snapshots
+      - ./models:/opt/fraude/models
+      - ./data:/opt/fraude/data
+      - ./sounds:/opt/fraude/sounds
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - fraude-net
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: "4.0"
+        reservations:
+          memory: 2G
+          cpus: "2.0"
+
+  # Dashboard Streamlit
+  dashboard:
+    image: fraude-fraud-detector:latest
+    container_name: fraud-dashboard
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./data:/opt/fraude/data
+      - ./recordings:/opt/fraude/recordings:ro
+      - ./snapshots:/opt/fraude/snapshots:ro
+      - ./models:/opt/fraude/models
+    ports:
+      - "${DASHBOARD_PORT:-8502}:8502"
+      - "8555:8555"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - fraude-net
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+    command: >
+      streamlit run dashboard/app.py
+      --server.port=8502
+      --server.address=0.0.0.0
+      --server.headless=true
+      --browser.gatherUsageStats=false
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "2.0"
+        reservations:
+          memory: 1G
+          cpus: "1.0"
+    depends_on:
+      - fraud-detector
+
+networks:
+  fraude-net:
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.host_binding_ipv4: "0.0.0.0"

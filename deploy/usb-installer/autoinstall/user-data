@@ -1,0 +1,112 @@
+#cloud-config
+# ============================================================
+# Ubuntu 24.04 Server - Autoinstall pour deploiement Fraude
+# ============================================================
+# Cible : machine Linux laissee en magasin, 1 SSD a effacer.
+# Resultat : Ubuntu Server 24.04 + Docker + Cockpit + l'app Fraude
+# qui demarre automatiquement au boot.
+#
+# Le hash du mot de passe (__PASSWORD_HASH__) est genere par
+# build-iso.ps1 au moment de la construction de l'ISO a partir
+# du mot de passe en clair "ASX@admin" (ou autre fourni en argument).
+# ============================================================
+autoinstall:
+  version: 1
+
+  # ----- Langue / clavier -----
+  locale: en_US.UTF-8
+  keyboard:
+    layout: fr
+    variant: ""
+
+  # ----- Reseau : DHCP sur toutes les interfaces filaires -----
+  network:
+    version: 2
+    ethernets:
+      any-eth:
+        match:
+          name: "en*"
+        dhcp4: true
+        dhcp6: false
+        optional: true
+
+  # ----- Disque : on efface tout, LVM ext4 sur le 1er disque -----
+  storage:
+    layout:
+      name: lvm
+      sizing-policy: all
+
+  # ----- Identite -----
+  identity:
+    hostname: fraude
+    username: fraude
+    # Hash genere par build-iso.ps1 (mot de passe : ASX@admin)
+    password: "__PASSWORD_HASH__"
+
+  # ----- SSH -----
+  ssh:
+    install-server: true
+    allow-pw: true
+
+  # ----- APT : sources par defaut + miroir Ubuntu officiel -----
+  apt:
+    fallback: offline-install
+    geoip: true
+    preserve_sources_list: false
+
+  # ----- Paquets installes pendant l'install -----
+  # docker.io + docker-compose-v2 : le moteur et le plugin compose
+  # cockpit                       : interface web admin (port 9090)
+  # openssh-server                : SSH (deja active par ssh: ci-dessus)
+  # ufw                           : firewall simple
+  # curl, ca-certificates, gnupg  : pour scripts post-install
+  # net-tools, htop, tmux         : confort admin distant
+  packages:
+    - docker.io
+    - docker-compose-v2
+    - cockpit
+    - openssh-server
+    - ufw
+    - curl
+    - ca-certificates
+    - gnupg
+    - net-tools
+    - htop
+    - tmux
+    - sqlite3
+
+  # ----- Mises a jour de securite avant reboot -----
+  updates: security
+
+  # ----- Pas de prompt de timezone : Casablanca -----
+  timezone: Africa/Casablanca
+
+  # ----- Pas de prompt interactif a la fin -----
+  shutdown: reboot
+
+  # ----- Commandes executees DANS l'environnement installe -----
+  # /cdrom = ISO d'install ; /target = systeme installe
+  # Les payload/* viennent de l'ISO remasterisee (cf build-iso.ps1)
+  late-commands:
+    # 1. Copie tout le payload dans /opt/fraude
+    - mkdir -p /target/opt/fraude
+    - cp -a /cdrom/payload/. /target/opt/fraude/
+    # 2. Permissions : le user fraude possede son dossier + scripts executables
+    - curtin in-target --target=/target -- chown -R fraude:fraude /opt/fraude
+    - curtin in-target --target=/target -- chmod +x /opt/fraude/scripts/load-images.sh
+    # 3. Installe le systemd unit
+    - cp /target/opt/fraude/systemd/fraude.service /target/etc/systemd/system/fraude.service
+    # 4. Ajoute le user fraude au groupe docker (acces socket sans sudo)
+    - curtin in-target --target=/target -- usermod -aG docker fraude
+    # 5. Active les services au prochain boot
+    - curtin in-target --target=/target -- systemctl enable docker.service
+    - curtin in-target --target=/target -- systemctl enable cockpit.socket
+    - curtin in-target --target=/target -- systemctl enable fraude.service
+    # 6. Firewall : SSH, Cockpit, Dashboard Streamlit, MJPEG live
+    - curtin in-target --target=/target -- ufw allow 22/tcp
+    - curtin in-target --target=/target -- ufw allow 9090/tcp
+    - curtin in-target --target=/target -- ufw allow 8502/tcp
+    - curtin in-target --target=/target -- ufw allow 8555/tcp
+    - curtin in-target --target=/target -- ufw --force enable
+    # 7. Marqueur d'install pour debug
+    - date -u +"%FT%TZ" > /target/opt/fraude/.installed_at

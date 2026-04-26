@@ -1,0 +1,26 @@
+[Unit]
+Description=Fraude - Detection de fraude retail (docker compose)
+Documentation=https://github.com/your-org/fraude
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/fraude
+# Charge les images Docker pre-construites (idempotent via marker)
+# 1er boot : ~2 min (docker load de l'archive 3.4 GB)
+# Boots suivants : skip immediat
+ExecStartPre=/opt/fraude/scripts/load-images.sh
+# Demarre la stack (pas de --build, pas de --pull : tout est local)
+ExecStart=/usr/bin/docker compose -f /opt/fraude/docker-compose.yml up -d --remove-orphans
+ExecStop=/usr/bin/docker compose -f /opt/fraude/docker-compose.yml down
+# 5 min suffisent largement pour load-images + up -d (pas de download)
+TimeoutStartSec=600
+TimeoutStopSec=300
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

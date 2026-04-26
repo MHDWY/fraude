@@ -1,0 +1,97 @@
+# ============================================
+# Docker Compose - Détection de Fraude Magasin
+# ============================================
+# Les caméras RTSP doivent être configurées avec leur IP LAN
+# (ex: rtsp://192.168.51.100:554/stream)
+# Docker Desktop Windows: les containers accèdent au LAN via host.docker.internal
+
+services:
+  # Service principal de détection de fraude
+  fraud-detector:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: fraud-detector
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      # Persistance des enregistrements vidéo
+      - ./recordings:/opt/fraude/recordings
+      # Snapshots de fraude (organisés par date: snapshots/YYYY-MM-DD/)
+      - ./snapshots:/opt/fraude/snapshots
+      # Modèles ONNX pré-téléchargés
+      - ./models:/opt/fraude/models
+      # Base de données SQLite
+      - ./data:/opt/fraude/data
+      # Son des alertes
+      - ./sounds:/opt/fraude/sounds
+    environment:
+      - DISPLAY=${DISPLAY:-:0}
+      - PULSE_SERVER=unix:${XDG_RUNTIME_DIR:-/run/user/1000}/pulse/native
+    # Réseau: accès aux caméras RTSP du LAN + Telegram
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - fraude-net
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+    # Limites de ressources pour un desktop i7 16GB
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: "4.0"
+        reservations:
+          memory: 2G
+          cpus: "2.0"
+
+  # Dashboard Streamlit (avec visualisation camera live)
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: fraud-dashboard
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./data:/opt/fraude/data
+      - ./recordings:/opt/fraude/recordings:ro
+      - ./snapshots:/opt/fraude/snapshots:ro
+      - ./models:/opt/fraude/models
+    ports:
+      - "${DASHBOARD_PORT:-8502}:8502"
+      - "8555:8555"  # Serveur MJPEG pour flux live camera
+    # Réseau: accès aux caméras RTSP du LAN pour le live viewer
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - fraude-net
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+    command: >
+      streamlit run dashboard/app.py
+      --server.port=8502
+      --server.address=0.0.0.0
+      --server.headless=true
+      --browser.gatherUsageStats=false
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "2.0"
+        reservations:
+          memory: 1G
+          cpus: "1.0"
+    depends_on:
+      - fraud-detector
+
+networks:
+  fraude-net:
+    driver: bridge
+    # Permet aux containers d'accéder au réseau local du host
+    driver_opts:
+      com.docker.network.bridge.host_binding_ipv4: "0.0.0.0"

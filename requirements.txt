@@ -1,0 +1,45 @@
+# ============================================
+# Dépendances - Détection de Fraude Magasin
+# ============================================
+
+# Vision par ordinateur
+opencv-python==4.10.0.84
+numpy==1.26.4
+
+# Inférence ONNX + OpenVINO (Intel GPU/CPU accelere, fallback CPU pur)
+onnxruntime-openvino==1.20.0
+
+# Modèles YOLO (téléchargement et conversion)
+ultralytics==8.3.50
+
+# Dashboard et visualisation
+streamlit==1.41.1
+plotly==5.24.1
+pandas==2.2.3
+matplotlib==3.9.3
+
+# Traitement d'images
+Pillow==11.1.0
+
+# Communication réseau
+requests==2.32.3
+
+# Configuration
+python-dotenv==1.0.1
+pydantic==2.10.4
+pydantic-settings==2.7.1
+
+# Export rapports
+openpyxl==3.1.5
+fpdf2==2.8.2
+
+# Son d'alerte
+playsound==1.3.0
+
+# Calculs scientifiques (tracking)
+scipy==1.14.1
+
+# Export ONNX (necessaire pour convertir les modeles YOLO)
+onnx>=1.12.0
+onnxslim
+onnxscript

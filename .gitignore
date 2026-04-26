@@ -1,0 +1,86 @@
+# =============================
+# Secrets & config locale
+# =============================
+.env
+.env.local
+*.pem
+*.key
+
+# =============================
+# Donnees runtime (sensibles ou volumineuses)
+# =============================
+# Tout le contenu runtime de data/ (DB, snapshots tests, heartbeat, recovery, exports)
+data/*
+!data/.gitkeep
+
+# Enregistrements video et snapshots (croissent rapidement)
+recordings/
+snapshots/
+
+# Modeles ML (binaires lourds, telecharges separement)
+models/*.onnx
+models/*.pt
+models/*.pth
+
+# =============================
+# Artefacts de deploiement (multi-GB, jamais dans git)
+# =============================
+fraude-installer.iso
+fraude-package.tar.gz
+deploy/usb-installer/payload/images/*.tar.gz
+deploy/usb-installer/payload/images/*.image-id
+deploy/usb-installer/payload/data/*.db
+deploy/package-installer/build/
+deploy/package-installer/*.tar.gz
+
+# =============================
+# Python
+# =============================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+.coverage
+htmlcov/
+
+# Virtual envs
+venv/
+.venv/
+env/
+ENV/
+
+# =============================
+# IDE / editeurs
+# =============================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# =============================
+# OS
+# =============================
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# =============================
+# Logs
+# =============================
+*.log
+logs/
+
+# =============================
+# Claude Code (etat local de l'agent)
+# =============================
+.claude/
+
+# =============================
+# Dossiers errones (bug PS truncation)
+# =============================
+*;C/

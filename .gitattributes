@@ -1,0 +1,40 @@
+# Auto-detect text files
+* text=auto
+
+# Scripts Linux : LF obligatoire (sinon bash casse avec /bin/bash^M)
+*.sh           text eol=lf
+*.service      text eol=lf
+*.bash         text eol=lf
+Dockerfile     text eol=lf
+Makefile       text eol=lf
+
+# Configs Linux
+*.yml          text eol=lf
+*.yaml         text eol=lf
+*.toml         text eol=lf
+
+# Python (LF par convention)
+*.py           text eol=lf
+
+# Scripts Windows : CRLF
+*.ps1          text eol=crlf
+*.bat          text eol=crlf
+*.cmd          text eol=crlf
+
+# Binaires (jamais convertis)
+*.png          binary
+*.jpg          binary
+*.jpeg         binary
+*.gif          binary
+*.ico          binary
+*.wav          binary
+*.mp3          binary
+*.mp4          binary
+*.onnx         binary
+*.pt           binary
+*.pth          binary
+*.tar          binary
+*.tar.gz       binary
+*.zip          binary
+*.iso          binary
+*.db           binary

@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>FRAUDE — Process de détection</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<style>
+  body { font-family: -apple-system, Segoe UI, sans-serif; margin: 24px; background: #f7f7fa; color: #222; }
+  h1 { margin-top: 0; }
+  h2 { margin-top: 32px; border-bottom: 2px solid #4a6ee0; padding-bottom: 4px; }
+  .card { background: #fff; border-radius: 8px; padding: 20px; margin: 16px 0; box-shadow: 0 2px 6px rgba(0,0,0,.06); }
+  .mermaid { text-align: center; }
+  .legend { font-size: 13px; color: #555; }
+</style>
+</head>
+<body>
+
+<h1>FRAUDE — Process de détection</h1>
+<p class="legend">Pipeline complet : capture vidéo → détection → suivi → analyse comportementale → alertes.</p>
+
+<div class="card">
+<h2>1. Pipeline global (par caméra)</h2>
+<div class="mermaid">
+flowchart TD
+    A[Flux RTSP caméra] --> B[Grab thread<br/>lit chaque frame à 15 fps]
+    B --> C[Buffer vidéo circulaire<br/>5s pré-événement]
+    B --> D[Dernière frame en mémoire]
+    D --> E{Inference frame skip?}
+    E -- skip --> Z1[Frame ignorée côté analyse<br/>mais enregistrée]
+    E -- traite --> F[YOLO détection<br/>personnes + objets]
+    F --> G[Filtre mannequins calibrés]
+    G --> H[Filtre zones d'exclusion]
+    H --> I[ByteTrack<br/>suivi multi-personnes]
+    I --> J{Mode caméra?}
+    J -- vol ou tout --> K[Pose estimation<br/>17 keypoints]
+    J -- caisse --> L[Skip pose]
+    K --> M[Analyse Vol]
+    L --> N[Analyse Caisse]
+    I --> N
+    M --> O[Gestionnaire alertes]
+    N --> O
+    O --> P[Telegram photo + vidéo]
+    O --> Q[Son 880 Hz]
+    O --> R[Clip vidéo 30s<br/>pré + post événement]
+
+    style B fill:#d4e8ff,stroke:#4a6ee0
+    style C fill:#d4e8ff,stroke:#4a6ee0
+    style F fill:#fff2cc,stroke:#d6a417
+    style K fill:#fff2cc,stroke:#d6a417
+    style M fill:#ffd6d6,stroke:#c33
+    style N fill:#ffd6d6,stroke:#c33
+    style O fill:#d5f5d5,stroke:#2a8
+</div>
+</div>
+
+<div class="card">
+<h2>2. Détection de vol (2 comportements)</h2>
+<div class="mermaid">
+flowchart LR
+    A[Pose + bbox personne] --> B{Main dans zone<br/>dissimulation?<br/>hanches/taille}
+    B -- oui --> C[+0.12 score<br/>CACHER_ARTICLE]
+    B -- non --> D[—]
+    A --> E{Mouvement main<br/>rentrant vers corps?}
+    E -- oui --> F[+0.15 score]
+    A --> G{Objet YOLO<br/>proche de la main?}
+    G -- oui --> H[+0.10 bonus]
+    A --> I{Main proche d'un sac<br/>+ alternance étagère/sac?}
+    I -- oui --> J[+0.10 à 0.25 score<br/>DISSIMULER_SAC]
+
+    C --> K[Score accumulé<br/>avec decay temporel]
+    F --> K
+    H --> K
+    J --> K
+    K --> L{Score > seuil<br/>0.4?}
+    L -- oui --> M[ALERTE 🚨]
+    L -- non --> N[Continue observation]
+    M --> O[Cooldown 30s<br/>mêmeTrack/type]
+
+    style M fill:#ffd6d6,stroke:#c33
+    style K fill:#fff2cc,stroke:#d6a417
+</div>
+<p class="legend"><strong>Decay temporel :</strong> score × 0.95^(dt × fps_ref) — indépendant du FPS.
+<br/><strong>Bonus concurrence :</strong> +15% si plusieurs comportements en simultané &gt; 0.25.</p>
+</div>
+
+<div class="card">
+<h2>3. Détection fraude caisse (state machine, 4 alertes)</h2>
+<div class="mermaid">
+stateDiagram-v2
+    [*] --> INACTIF
+    INACTIF --> SCAN: Douchette en mouvement<br/>ou article détecté
+    SCAN --> PAIEMENT: Main près du terminal<br/>ou tiroir-caisse ouvert
+    PAIEMENT --> ATTENTE_TICKET: Paiement validé
+    ATTENTE_TICKET --> TICKET_IMPRIME: Papier blanc détecté<br/>dans zone imprimante
+    TICKET_IMPRIME --> REMIS: Mains caissier ↔ client<br/>proximité < seuil
+    REMIS --> OK
+    OK --> INACTIF: Fin transaction
+
+    ATTENTE_TICKET --> PAIEMENT_SANS_TICKET: Timeout 12s<br/>🚨
+    SCAN --> SCAN_SANS_TICKET: Scan sans ticket<br/>après délai 🚨
+    TICKET_IMPRIME --> DEPART_SANS_TICKET: Client part<br/>sans recevoir 🚨
+    INACTIF --> TICKET_SANS_CLIENT: Ticket imprimé<br/>mais aucun client détecté 🚨
+</div>
+</div>
+
+<div class="card">
+<h2>4. Détection visuelle du ticket imprimante</h2>
+<div class="mermaid">
+flowchart TD
+    A[Frame courante] --> B[Extraction ROI imprimante<br/>bbox calibrée dashboard]
+    B --> C[Conversion niveaux de gris]
+    C --> D{Référence existante?}
+    D -- non --> E[Sauvegarde comme référence<br/>timestamp]
+    D -- oui --> F[diff = |ROI - référence|]
+    F --> G[Masque changement<br/>diff > 30]
+    F --> H[Masque blanc<br/>pixel > 200]
+    G --> I[Intersection<br/>pixels changés ET blancs]
+    H --> I
+    I --> J{ratio > 15%?}
+    J -- oui --> K[✅ Ticket détecté]
+    J -- non --> L{Forme verticale<br/>blanche?}
+    L -- oui --> K
+    L -- non --> M[Pas de ticket]
+
+    F --> N{Timeout 180s<br/>ET diff moyenne < 8?}
+    N -- oui --> O[Rafraîchir la référence<br/>scène stable]
+    N -- non --> P[Garder référence actuelle]
+
+    style K fill:#d5f5d5,stroke:#2a8
+    style N fill:#fff2cc,stroke:#d6a417
+</div>
+<p class="legend">Le refresh intelligent évite de capturer un client/ticket dans la référence (fix récent).</p>
+</div>
+
+<div class="card">
+<h2>5. Zones du magasin (9 zones)</h2>
+<div class="mermaid">
+flowchart TB
+    subgraph Haut [Rayons - haut 30%]
+        R1[Rayon_A] --- R2[Rayon_B] --- R3[Rayon_C]
+    end
+    subgraph Milieu [Allées - milieu 40%]
+        A1[Allée_G] --- A2[Allée_C] --- A3[Allée_D]
+    end
+    subgraph Bas [Entrée/Caisse/Sortie - bas 30%]
+        E1[Entrée] --- E2[Caisse] --- E3[Sortie]
+    end
+    Haut --- Milieu --- Bas
+
+    style R1 fill:#e3f0ff
+    style R2 fill:#e3f0ff
+    style R3 fill:#e3f0ff
+    style E2 fill:#ffd6d6
+</div>
+</div>
+
+<script>
+  mermaid.initialize({ startOnLoad: true, theme: 'default', flowchart: { curve: 'basis' } });
+</script>
+</body>
+</html>

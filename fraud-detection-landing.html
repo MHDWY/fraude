@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FraudGuard AI - Protection Retail Haute Performance - Casablanca</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <style>
+        /* --- Variables de Couleur (Palette Sombre/Tech) --- */
+        :root {
+            --bg-dark: #0a0f1e;       /* Fond principal très sombre */
+            --bg-panel: #111827;      /* Fond des cartes et panneaux */
+            --primary: #3b82f6;       /* Bleu Tech (Accent) */
+            --primary-dim: rgba(59, 130, 246, 0.1);
+            --accent: #10b981;        /* Vert Sécurité (Validations/ROI) */
+            --text-main: #e5e7eb;     /* Texte principal clair */
+            --text-muted: #9ca3af;    /* Texte secondaire estompé */
+            --border: #1f2937;        /* Bordures discrètes */
+        }
+
+        /* --- Reset & Base --- */
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { 
+            font-family: 'Inter', 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; 
+            line-height: 1.6; 
+            color: var(--text-main); 
+            background-color: var(--bg-dark); 
+            overflow-x: hidden;
+            scroll-behavior: smooth;
+        }
+        .container { max-width: 1200px; margin: 0 auto; padding: 0 20px; }
+        a { text-decoration: none; color: inherit; transition: 0.3s; }
+        ul { list-style: none; }
+
+        /* --- Utilitaires --- */
+        .section-title { text-align: center; font-size: 2.5rem; margin-bottom: 1rem; color: #fff; }
+        .section-subtitle { text-align: center; color: var(--text-muted); margin-bottom: 60px; max-width: 700px; margin-left: auto; margin-right: auto; }
+        .highlight { color: var(--primary); font-weight: 600; }
+        .btn { 
+            background: var(--primary); 
+            color: white; 
+            padding: 14px 30px; 
+            border-radius: 8px; 
+            font-weight: bold; 
+            display: inline-block; 
+            border: 1px solid transparent;
+            cursor: pointer;
+        }
+        .btn:hover { background: #2563eb; transform: translateY(-2px); box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3); }
+
+        /* --- Hero Section --- */
+        header { 
+            background: radial-gradient(circle at center, #1e3a8a 0%, var(--bg-dark) 70%);
+            padding: 150px 0; 
+            text-align: center; 
+            position: relative;
+        }
+        header::before {
+            content: ''; position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background-image: url('data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0MCIgaGVpZ2h0PSI0MCIgdmlld0JveD0iMCAwIDQwIDQwIj48ZyBmaWxsLXJ1bGU9ImV2ZW5vZGQiPjxnIGZpbGw9IiNmZmYiIGZpbGwtb3BhY2l0eT0iMC4wNSI+PHBhdGggZD0iTTAgMGg0MHY0MEgwVjB6bTIwIDIwaDIwdjIwSDIWMjB6TTAgMjBoMjB2MjBIMFYyMHoyMCAwaDIwdjIwSDIwVjB6Ii8+PC9nPjwvZz48L3N2Zz4=');
+            opacity: 0.3;
+        }
+        .logo-area { font-size: 1.5rem; font-weight: bold; color: #fff; margin-bottom: 20px; display: flex; align-items: center; justify-content: center; gap: 10px; }
+        h1 { font-size: 3.5rem; margin-bottom: 20px; color: #fff; line-height: 1.2; }
+        .hero-tag { font-size: 1.25rem; color: var(--text-muted); margin-bottom: 40px; max-width: 800px; margin-left: auto; margin-right: auto; }
+
+        /* --- ROI Section --- */
+        .roi { padding: 80px 0; background: var(--bg-panel); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+        .roi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 30px; }
+        .roi-card { 
+            background: rgba(255,255,255,0.03); 
+            padding: 40px; 
+            border-radius: 12px; 
+            text-align: center; 
+            border: 1px solid var(--border);
+            transition: 0.3s;
+        }
+        .roi-card:hover { border-color: var(--accent); background: rgba(16, 185, 129, 0.05); transform: translateY(-5px); }
+        .roi-card i { font-size: 2.5rem; color: var(--accent); margin-bottom: 20px; }
+        .roi-value { font-size: 2rem; font-weight: bold; color: #fff; margin-bottom: 10px; }
+        .roi-card p { color: var(--text-muted); font-size: 1rem; }
+
+        /* --- Pricing Section --- */
+        .pricing { padding: 100px 0; }
+        
+        .capex-panel { 
+            background: linear-gradient(135deg, #111827 0%, #1e293b 100%); 
+            padding: 40px; 
+            border-radius: 12px; 
+            margin-bottom: 50px; 
+            border: 1px solid var(--primary); 
+            display: grid;
+            grid-template-columns: 1fr 2fr 1fr;
+            align-items: center; 
+            gap: 30px;
+            box-shadow: 0 8px 20px rgba(0,0,0,0.3);
+        }
+        .capex-hardware-img {
+            width: 100%;
+            max-width: 250px;
+            height: auto;
+            border-radius: 8px;
+            border: 2px solid var(--border);
+            box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+        }
+        .capex-info h3 { color: #fff; margin-bottom: 10px; font-size: 1.5rem; }
+        .capex-info p { color: var(--text-muted); font-size: 0.95rem; }
+        .capex-price { font-size: 2.5rem; font-weight: bold; color: #fff; white-space: nowrap; text-align: right;}
+
+        .pricing-table { 
+            width: 100%; border-collapse: collapse; background: var(--bg-panel); border-radius: 12px; overflow: hidden; border: 1px solid var(--border); 
+            box-shadow: 0 4px 6px rgba(0,0,0,0.2);
+        }
+        .pricing-table th { background: rgba(255,255,255,0.05); color: #fff; padding: 25px; text-align: center; text-transform: uppercase; letter-spacing: 1px; font-size: 0.9rem; border-bottom: 1px solid var(--border); }
+        .pricing-table td { padding: 25px; border-bottom: 1px solid var(--border); text-align: center; color: var(--text-muted); }
+        .pricing-table tr:last-child td { border-bottom: none; }
+        .pricing-table .price-cell { font-size: 1.75rem; font-weight: bold; color: var(--primary); }
+        .pricing-table .pack-name { color: #fff; font-weight: 600; font-size: 1.1rem; }
+
+        .erp-option { 
+            margin-top: 40px; padding: 30px; border: 2px dashed var(--border); border-radius: 12px; text-align: center; background: rgba(255,255,255,0.01); 
+            transition: 0.3s;
+        }
+        .erp-option:hover { border-color: var(--primary); background: rgba(59, 130, 246, 0.03); }
+        .erp-option h4 { color: #fff; margin-bottom: 10px; font-size: 1.25rem; display: flex; align-items: center; justify-content: center; gap: 10px;}
+        .erp-badge { background: var(--primary); color: white; padding: 5px 15px; border-radius: 20px; font-size: 0.8rem; font-weight: bold; letter-spacing: 1px; }
+
+        /* --- Technical Specs --- */
+        .tech-specs { padding: 100px 0; background: var(--bg-panel); border-top: 1px solid var(--border); }
+        .spec-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(450px, 1fr)); gap: 40px; }
+        .spec-item { display: flex; align-items: flex-start; gap: 20px; background: rgba(0,0,0,0.2); padding: 30px; border-radius: 10px; border: 1px solid transparent; }
+        .spec-item:hover { border-color: var(--border); background: rgba(0,0,0,0.3); }
+        .spec-item i { color: var(--primary); font-size: 1.75rem; margin-top: 3px; }
+        .spec-item h4 { color: #fff; margin-bottom: 8px; font-size: 1.2rem; }
+        .spec-item p { color: var(--text-muted); font-size: 0.95rem; }
+
+        /* --- Call to Action --- */
+        .cta { background: linear-gradient(135deg, #1e3a8a 0%, #0a0f1e 100%); padding: 100px 0; text-align: center; border-top: 1px solid var(--primary); }
+        .cta h2 { font-size: 2.5rem; color: #fff; margin-bottom: 15px; }
+        .cta p { color: var(--text-muted); margin-bottom: 40px; font-size: 1.1rem; }
+        .location-badge { display: inline-flex; align-items: center; gap: 8px; background: rgba(255,255,255,0.1); padding: 8px 16px; border-radius: 20px; color: #fff; font-size: 0.9rem; margin-top: 20px;}
+
+        /* --- Footer --- */
+        footer { padding: 30px 0; text-align: center; color: #4b5563; font-size: 0.85rem; border-top: 1px solid var(--border); }
+
+        /* --- Responsive --- */
+        @media (max-width: 992px) {
+            h1 { font-size: 2.5rem; }
+            .capex-panel { grid-template-columns: 1fr; text-align: center; justify-items: center; }
+            .capex-price { text-align: center; margin-top: 10px; }
+            .spec-grid { grid-template-columns: 1fr; }
+        }
+        @media (max-width: 768px) {
+            h1 { font-size: 2rem; }
+            .section-title { font-size: 2rem; }
+            header { padding: 100px 0; }
+            .pricing-table { display: block; overflow-x: auto; }
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <div class="container">
+            <div class="logo-area">
+                <i class="fas fa-user-shield"></i> FraudGuard AI
+            </div>
+            <h1>Sentinelle Intelligente du Réseau Retail</h1>
+            <p class="hero-tag">Sécurisez chaque transaction, dans chaque magasin, avec l'intelligence artificielle décentralisée.</p>
+            <a href="#contact" class="btn">Démarrer une étude ROI</a>
+        </div>
+    </header>
+
+    <section class="roi">
+        <div class="container">
+            <div class="roi-grid">
+                <div class="roi-card">
+                    <i class="fas fa-hand-holding-usd"></i>
+                    <div class="roi-value">-80% de fraude</div>
+                    <p>Réduction immédiate des pertes sèches en caisse.</p>
+                </div>
+                <div class="roi-card">
+                    <i class="fas fa-tachometer-alt"></i>
+                    <div class="roi-value">< 100ms</div>
+                    <p>Analyse ultra-rapide sans ralentir l'expérience client.</p>
+                </div>
+                <div class="roi-card">
+                    <i class="fas fa-history"></i>
+                    <div class="roi-value">ROI < 6 mois</div>
+                    <p>Amortissement rapide par la sécurisation des marges.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="pricing" id="pricing">
+        <div class="container">
+            <h2 class="section-title">Investissement Transparent</h2>
+            <p class="section-subtitle">Un modèle conçu pour accompagner la croissance de votre réseau, de la boutique pilote au déploiement national.</p>
+            
+            <div class="capex-panel">
+                <img src="Gemini.png" alt="FraudGuard AI Edge Hardware Node" class="capex-hardware-img">
+                <div class="capex-info">
+                    <h3>Frais de Déploiement par Magasin (CAPEX)</h3>
+                    <p>Inclut le boîtier FraudGuard AI Edge Node , l'installation physique sur site, la configuration des terminaux de paiement et la formation des équipes (Arabe/Français).</p>
+                </div>
+                <div class="capex-price">45 000 MAD</div>
+            </div>
+
+            <table class="pricing-table">
+                <thead>
+                    <tr>
+                        <th>Taille du Réseau</th>
+                        <th>Abonnement Mensuel / Magasin</th>
+                        <th>Services Inclus</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td class="pack-name">1 - 10 magasins</td>
+                        <td class="price-cell">2 500 MAD</td>
+                        <td>Support Standard & Alertes Temps Réel</td>
+                    </tr>
+                    <tr>
+                        <td class="pack-name">11 - 50 magasins</td>
+                        <td class="price-cell">1 900 MAD</td>
+                        <td>Dashboards Régionaux & Alertes SMS</td>
+                    </tr>
+                    <tr>
+                        <td class="pack-name">Plus de 50 magasins</td>
+                        <td class="price-cell">1 400 MAD</td>
+                        <td>SLA 99.9% & Support Dédié 24/7</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <div class="erp-option">
+                <h4><i class="fas fa-plug"></i> Besoin d'une intégration ERP spécifique ? <span class="erp-badge">SUR DEVIS</span></h4>
+                <p style="color: var(--text-muted);">Connectivité SAP, Odoo, Oracle ou systèmes propriétaires (étude technique dédiée).</p>
+            </div>
+        </div>
+    </section>
+
+    <section class="tech-specs">
+        <div class="container">
+            <h2 class="section-title">L'Excellence Technique au service du Retail</h2>
+            <p class="section-subtitle">Une architecture "Edge AI" robuste, conçue pour les contraintes du terrain.</p>
+            <div class="spec-grid">
+                <div class="spec-item">
+                    <i class="fas fa-microchip"></i>
+                    <div>
+                        <h4>IA Edge Décentralisée</h4>
+                        <p>Chaque magasin possède son autonomie décisionnelle via le boîtier local. Pas de dépendance au serveur central pour la détection.</p>
+                    </div>
+                </div>
+                <div class="spec-item">
+                    <i class="fas fa-database"></i>
+                    <div>
+                        <h4>Souveraineté des Données</h4>
+                        <p>Traitement local au Maroc conforme aux directives CNDP. Vos transactions sensibles ne quittent pas le territoire.</p>
+                    </div>
+                </div>
+                <div class="spec-item">
+                    <i class="fas fa-language"></i>
+                    <div>
+                        <h4>Interface Multilingue</h4>
+                        <p>Tableaux de bord intuitifs disponibles en Arabe, Français et Anglais pour tous les niveaux opérationnels.</p>
+                    </div>
+                </div>
+                <div class="spec-item">
+                    <i class="fas fa-network-wired"></i>
+                    <div>
+                        <h4>Connectivité API Standard</h4>
+                        <p>Sortie de données compatible avec vos outils de BI modernes pour un reporting consolidé.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="cta" id="contact">
+        <div class="container">
+            <h2>Prêt à sécuriser vos marges ?</h2>
+            <p></p>
+            <a href="mailto:contact@fraudguard.ma" class="btn">Demander un devis personnalisé</a>
+            <br>
+            <div class="location-badge">
+                <i class="fas fa-building"></i> 
+            </div>
+        </div>
+    </section>
+
+    <footer>
+        <div class="container">
+            <p>&copy; 2026 FraudGuard AI. Tous droits réservés.</p>
+        </div>
+    </footer>
+
+</body>
+</html>
