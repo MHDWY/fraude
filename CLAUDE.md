@@ -54,6 +54,70 @@ docker compose up -d --build
   ```
 - Si nouveau poste : `ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519` puis copier la cle pub dans `authorized_keys` du magasin (premiere fois via password `asx`).
 
+## Workflow correctifs (git-based, sans rebuild d'image)
+
+**Repo source de verite** : https://github.com/MHDWY/fraude (prive, branche `main`)
+
+Le code Python est embarque dans l'image Docker, mais on monte le dossier `app/` et `dashboard/` du repo cloud en volume read-only sur le magasin. Resultat : pousser un correctif = `git push` cote dev + `git pull` cote magasin + `docker compose restart`. Pas de rebuild, pas de transfert d'image, ~30 sec total.
+
+**Layout sur le magasin :**
+```
+/opt/fraude/                              # install package (gere par install.sh)
+├── docker-compose.yml                    # version magasin (image: pre-construite)
+├── docker-compose.override.yml           # LOCAL au magasin, NON commite
+│                                         # → mount /home/fraude/fraude-src/app et /dashboard
+├── .env, data/, recordings/, snapshots/, sounds/, models/
+
+/home/fraude/fraude-src/                  # git clone read-only de github.com/MHDWY/fraude
+├── app/, dashboard/, scripts/, deploy/, ...
+
+/etc/systemd/system/fraude.service.d/
+└── override.conf                         # drop-in : retire `-f docker-compose.yml` explicite
+                                          # pour que docker compose auto-decouvre l'override.yml
+```
+
+**Deploy key GitHub** : la cle SSH `~/.ssh/github_deploy` sur le magasin est enregistree comme Deploy Key (read-only) sur le repo. Permet `git pull` sans interaction. Si nouveau magasin : generer une nouvelle paire et l'ajouter dans Settings → Deploy Keys.
+
+**Workflow standard :**
+```powershell
+# Cote dev Windows
+.\deploy\hotfix.ps1                       # push + pull + restart les 2 containers
+.\deploy\hotfix.ps1 -Service detector     # restart fraud-detector uniquement
+.\deploy\hotfix.ps1 -NoRestart            # juste pousser le code, restart manuel ensuite
+```
+
+Le script `deploy/hotfix.ps1` :
+1. Refuse si working tree pas commit (propose commit)
+2. `git push`
+3. `ssh fraude "cd ~/fraude-src && git pull"` (affiche les commits appliques)
+4. `ssh fraude "cd /opt/fraude && docker compose restart <service>"`
+5. Wait healthcheck (max 60s) + report etat final
+
+**Workflow manuel (si tu veux tout faire toi-meme) :**
+```bash
+# Local
+git push
+
+# Magasin
+ssh fraude
+cd ~/fraude-src && git pull
+cd /opt/fraude && docker compose restart fraud-detector  # ou dashboard, ou rien (les 2)
+docker ps   # check healthy
+```
+
+**Rollback :**
+```bash
+# Local : revenir a l'avant-dernier commit
+git revert HEAD && git push
+ssh fraude "cd ~/fraude-src && git pull && cd /opt/fraude && docker compose restart"
+```
+
+**Limites a connaitre :**
+- Le `.env`, la DB, les modeles ONNX ne sont **pas** dans git → modifs de config se font via le dashboard Admin ou directement sur le magasin.
+- Si tu modifies `Dockerfile`, `requirements.txt` ou les modeles → necessite un rebuild d'image complet (workflow package installer, pas hotfix).
+- Si le package installer (`fraude-package.tar.gz`) est re-deploye, il ecrase `/opt/fraude/` → l'override.yml est perdu, il faut le recreer (les patches du code restent dans `/home/fraude/fraude-src/` qui n'est pas touche par le package).
+- L'override.yml et le drop-in systemd ne sont pas dans git → si on remonte un nouveau magasin il faudra les recreer (a integrer dans `install.sh` plus tard).
+
 ## Architecture
 
 Real-time video pipeline: Frame → YOLO Detection → ByteTrack → Pose Estimation → Behavior Analysis + Caisse Analysis → Alerts
