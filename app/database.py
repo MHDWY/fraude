@@ -264,6 +264,7 @@ class BaseDonneesFraude:
                 # Systeme
                 ("dashboard_port", "8502", "systeme", "Port du dashboard Streamlit", "int"),
                 ("dashboard_refresh_seconds", "10", "systeme", "Intervalle de rafraichissement du dashboard (s)", "int"),
+                ("admin_password", "asx", "systeme", "Mot de passe d'acces a l'onglet Administration du dashboard", "str"),
                 ("video_save_path", "./recordings", "systeme", "Repertoire des enregistrements video", "str"),
                 ("model_path", "./models", "systeme", "Repertoire des modeles ONNX", "str"),
                 ("database_path", "./data/fraude.db", "systeme", "Chemin de la base de donnees", "str"),

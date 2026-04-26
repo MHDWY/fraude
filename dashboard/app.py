@@ -550,13 +550,43 @@ def page_dashboard():
 
 def page_administration():
     db = obtenir_db()
+
+    # ---- Gate mot de passe (par session navigateur) ----
+    if not st.session_state.get("admin_unlocked", False):
+        afficher_header(
+            "🔒", "Administration",
+            "Acces protege - saisis le mot de passe pour deverrouiller",
+            "VERROUILLE", "badge-admin",
+        )
+        col_g, col_form, col_d = st.columns([1, 2, 1])
+        with col_form:
+            with st.form("admin_login", clear_on_submit=True):
+                pwd = st.text_input("Mot de passe", type="password",
+                                    placeholder="...", label_visibility="visible")
+                if st.form_submit_button("🔓 Deverrouiller", type="primary", use_container_width=True):
+                    expected = db.obtenir_parametre("admin_password", "asx")
+                    if pwd == expected:
+                        st.session_state["admin_unlocked"] = True
+                        st.rerun()
+                    else:
+                        st.error("Mot de passe incorrect")
+        return
+
     params = _obtenir_params_dict(db)
 
-    afficher_header(
-        "⚙️", "Administration",
-        "Configuration de tous les parametres du systeme de detection",
-        "ADMIN", "badge-admin",
-    )
+    # Header + bouton de verrouillage manuel
+    col_h, col_lock = st.columns([5, 1])
+    with col_h:
+        afficher_header(
+            "⚙️", "Administration",
+            "Configuration de tous les parametres du systeme de detection",
+            "ADMIN", "badge-admin",
+        )
+    with col_lock:
+        st.write("")  # alignement vertical
+        if st.button("🔒 Verrouiller", help="Re-verrouiller l'acces administration"):
+            st.session_state["admin_unlocked"] = False
+            st.rerun()
 
     tab_cam, tab_train, tab_alert, tab_users, tab_vol, tab_metier, tab_sys = st.tabs([
         "📷 Cameras", "🎯 Entrainement",
@@ -1422,6 +1452,27 @@ def page_administration():
                 db.definir_parametre("database_path", db_path, "systeme", type_valeur="str")
                 st.success("Parametres systeme sauvegardes.")
 
+        # --- Changement mot de passe administration ---
+        afficher_section("🔐", "Mot de passe administration")
+        with st.form("form_admin_password", clear_on_submit=True):
+            current_pwd = st.text_input("Mot de passe actuel", type="password")
+            c1, c2 = st.columns(2)
+            with c1:
+                new_pwd = st.text_input("Nouveau mot de passe", type="password")
+            with c2:
+                confirm_pwd = st.text_input("Confirmer", type="password")
+            if st.form_submit_button("💾 Changer le mot de passe", type="primary"):
+                expected = db.obtenir_parametre("admin_password", "asx")
+                if current_pwd != expected:
+                    st.error("Mot de passe actuel incorrect.")
+                elif not new_pwd:
+                    st.error("Le nouveau mot de passe ne peut pas etre vide.")
+                elif new_pwd != confirm_pwd:
+                    st.error("La confirmation ne correspond pas.")
+                else:
+                    db.definir_parametre("admin_password", new_pwd, "systeme", type_valeur="str")
+                    st.success("Mot de passe administration mis a jour.")
+
         # --- Monitoring espace disque ---
         afficher_section("💾", "Espace disque")
         vid_dir = Path(_param(params, "video_save_path", "./recordings"))
@@ -1487,6 +1538,8 @@ def page_administration():
         tous = db.obtenir_tous_parametres()
         if tous:
             df_params = pd.DataFrame(tous)
+            # Masquer la valeur du mot de passe admin dans la table
+            df_params.loc[df_params["cle"] == "admin_password", "valeur"] = "••••••••"
             st.dataframe(df_params[["cle", "valeur", "categorie", "type_valeur", "mis_a_jour"]],
                          use_container_width=True, hide_index=True)
 
