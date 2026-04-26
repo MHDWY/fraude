@@ -32,7 +32,10 @@ docker compose up -d --build
 | NVR magasin | Hikvision sur 192.168.1.5 (Caisse) et 192.168.1.3 (autres) |
 | Microsoft Hack applique | Oui (`/EFI/Microsoft/Boot/bootmgfw.efi` = shimx64.efi Ubuntu) |
 | Tunings appliques | Lid switch ignore + CPU governor performance + cpupower.service |
-| Telegram bot | Non configure (TELEGRAM_BOT_TOKEN vide dans `.env`) |
+| Telegram bot | **Configure** : @Frdclt001_bot (id 8595839140) → chat `6119440920` (Mh Mj). Token + chat_id stockes dans `parametres` table cat `telegram` (pas dans `.env`). |
+| Repo source code | **https://github.com/MHDWY/fraude** (prive) — deploy key SSH `~/.ssh/github_deploy` sur magasin, read-only |
+| Workflow correctifs | Volume mount `/home/fraude/fraude-src/{app,dashboard}` → `/opt/fraude/{app,dashboard}` (ro), patch via `git pull` + `docker compose restart` (~30s, no rebuild) |
+| Admin dashboard | Onglet protege par mot de passe (param DB `admin_password`, defaut `asx`, modifiable via Systeme tab) |
 
 **Acces post-deployment :**
 - Dashboard : http://100.123.127.5:8502 (ou http://fraude:8502 si MagicDNS active)
@@ -127,7 +130,7 @@ Real-time video pipeline: Frame → YOLO Detection → ByteTrack → Pose Estima
 - **Caisse Analyzer**: State machine per transaction (scan → payment → ticket → handoff)
 - **Multi-Camera**: `OrchestrateurMultiCamera` spawns one `CameraWorker` thread per active camera in DB
 - **Database**: SQLite with WAL mode (requires read-write mount, no `:ro`)
-- **Dashboard**: Streamlit on port 8502 (3 pages: Dashboard, Historique, Administration)
+- **Dashboard**: Streamlit on port 8502 (3 pages: Dashboard, Historique, Administration — onglet Administration protege par mot de passe `admin_password`, defaut `asx`)
 - **Docker**: 2 services (`fraud-detector`, `fraud-dashboard` with host network)
 
 ### Multi-Camera Architecture
@@ -185,14 +188,14 @@ Real-time video pipeline: Frame → YOLO Detection → ByteTrack → Pose Estima
 - Settings seeded on first run via `initialiser_parametres_defaut()`
 - Config hierarchy: .env → Pydantic Settings → DB parametres → defaults
 - Dashboard sidebar: 3 pages (Dashboard, Historique, Administration)
-- Admin page: **7 tabs** (Cameras, **Entrainement**, Alertes, Utilisateurs, Detection Vol, Metier, Systeme)
+- Admin page: **7 tabs** (Cameras, **Entrainement**, Alertes, Utilisateurs, Detection Vol, Metier, Systeme), protege par mot de passe (`admin_password` en DB cat `systeme`, defaut `asx`, deverrouillage par session via `st.session_state["admin_unlocked"]`, bouton verrouiller manuel, formulaire de changement dans Systeme tab, valeur masquee dans la table "Tous les parametres")
 - `st.form()` used for all admin inputs to avoid Streamlit reruns
 
 ## Database Tables
 
 - `alertes` — production detection events (bbox, confidence, snapshot, video path) — CRUD via Historique
 - `stats_journalieres` — daily aggregates (alerts, loss DH, incidents)
-- `parametres` — all configurable settings (~49 defaults including vol and exclusion categories)
+- `parametres` — all configurable settings (~50 defaults : vol, exclusion, telegram, systeme dont `admin_password`)
 - `cameras` — registered camera sources (name, url, zone, **niveau**, active, mode_detection)
 - `zones_exclusion` — per-camera exclusion zones (pct coordinates, manual/auto source, active flag)
 - `sessions_apprentissage` — auto-learning sessions (camera_id, duration, status)
