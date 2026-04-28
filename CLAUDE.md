@@ -313,6 +313,8 @@ Entree   Caisse   Sortie    (bottom 30%)
 - Max 5 persons for pose estimation per frame (CPU constraint)
 - RTSP capture: persistent connections, `threading.Event`-based frame signaling, TCP transport
 - DEBUG logging active in `camera_worker.py` every 30 frames (to be removed after validation)
+- **Hot-reload cameras NON supporte** : modifier `cameras` table (URL, mode_detection, active toggle) via Admin > Cameras ne se propage PAS aux workers en cours. Chaque worker est cree au demarrage de `OrchestrateurMultiCamera` avec sa config DB et la garde jusqu'au crash/restart. Apres modif → restart `fraud-detector` (`docker compose restart fraud-detector` ou via le script hotfix). TODO : ajouter un bouton "Recharger les cameras" dans le dashboard qui envoie un signal au superviseur.
+- **Token DVR visible dans les logs** : quand un worker echoue a ouvrir un RTSP, l'URL complete (avec `user:pass@`) est loggee en clair via `logger.error`. A masquer dans `camera_worker.py` (sed-like sur `:[^@]*@` avant log).
 
 ### Clothing Detection (Optional)
 
