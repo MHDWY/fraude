@@ -709,6 +709,19 @@ class AnalyseurCaisse:
         alertes = []
         maintenant = time.time()
 
+        # === OBSERVATION IMPRIMANTE INDEPENDANTE DU STATE MACHINE ===
+        # Detecte chaque ticket qui sort, meme si aucun caissier n'est track.
+        # Utile quand la detection scan-par-pose ne marche pas (ex: caissier
+        # filme de dos, hands keypoints invisibles). Log INFO a chaque detection.
+        # Le filtre HEVC + 2 frames consecutives evite les faux positifs.
+        if self._imprimante_configuree and frame is not None:
+            ticket_observe = self._detecter_papier_imprimante(frame, taille_frame)
+            if ticket_observe:
+                logger.info(
+                    f"[IMPRIMANTE OBS] Ticket detecte (mode observation, "
+                    f"hors state machine) — {len(pistes)} pistes actives"
+                )
+
         # 1. Identifier les caissiers
         ids_caissiers = self._identifier_caissiers(pistes, taille_frame)
 
