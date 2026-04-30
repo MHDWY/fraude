@@ -1411,9 +1411,17 @@ def page_administration():
                         st.rerun()
 
             if mjpeg_actif and mjpeg_meme_cam:
+                # URL calculee cote navigateur (window.location.hostname) pour fonctionner
+                # via Tailscale/LAN/local sans hardcoder l'IP du magasin
                 st.markdown(
-                    '<img src="http://localhost:8555/stream" '
-                    'style="width:100%;border-radius:10px;border:2px solid #4fc3f7;" />',
+                    '<img id="live-mjpeg" '
+                    'style="width:100%;border-radius:10px;border:2px solid #4fc3f7;" />'
+                    '<script>'
+                    "(function(){"
+                    "var img=document.getElementById('live-mjpeg');"
+                    "if(img){img.src=window.location.protocol+'//'+window.location.hostname+':8555/stream';}"
+                    "})();"
+                    '</script>',
                     unsafe_allow_html=True,
                 )
                 try:
