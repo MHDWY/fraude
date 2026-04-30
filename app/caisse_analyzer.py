@@ -149,6 +149,11 @@ class AnalyseurCaisse:
         # Frame de reference de la zone imprimante (sans papier)
         self._imprimante_ref: Optional[np.ndarray] = None
         self._imprimante_ref_ts: float = 0.0
+        # Compteur de detections positives consecutives pour filtrer les glitches HEVC
+        # (un seul frame qui declenche peut etre une corruption de decode RTSP).
+        # On ne valide qu'apres N frames consecutives.
+        self._imprimante_compteur_positif: int = 0
+        self._imprimante_min_frames_consecutives: int = 2
         self.nb_cycles_scan_min = nb_cycles_scan_min
         self.cooldown = cooldown_secondes
         self.detecter_transaction_fantome = detecter_transaction_fantome
@@ -389,6 +394,19 @@ class AnalyseurCaisse:
         Returns:
             True si papier detecte, False si pas de papier, None si indetermine
         """
+        # Sanity check : si la frame entiere est anormalement claire (mean > 200),
+        # c'est presque toujours une corruption HEVC du flux RTSP (decode error
+        # type "Could not find ref with POC X"). On ignore pour eviter un faux
+        # positif geant qui declenche une fausse alerte ticket.
+        frame_mean_global = float(frame.mean())
+        if frame_mean_global > 200.0:
+            logger.debug(
+                f"_detecter_papier_imprimante: frame ignoree, mean global "
+                f"{frame_mean_global:.0f} > 200 (corruption HEVC probable)"
+            )
+            self._imprimante_compteur_positif = 0  # reset au premier glitch
+            return None
+
         # Extraire la ROI de l'imprimante
         x1, y1, x2, y2 = self._obtenir_roi_imprimante(taille_frame)
         if x2 - x1 < 10 or y2 - y1 < 10:
@@ -436,23 +454,48 @@ class AnalyseurCaisse:
             return None
         ratio_papier = np.count_nonzero(masque_papier) / nb_pixels
 
+        # Pre-detection brute (1 seule frame). On confirmera avec le compteur
+        # consecutif ci-dessous pour eviter les declenchements sur 1 frame
+        # corrompue HEVC ou un flash de luminosite isole.
+        detecte_brut = False
+        raison = ""
+
         if ratio_papier > self.imprimante_seuil_changement:
-            logger.info(f"Papier detecte dans l'imprimante: {ratio_papier:.1%} pixels blancs")
-            return True
+            detecte_brut = True
+            raison = f"{ratio_papier:.1%} pixels blancs nouveaux"
 
         # Methode complementaire: detecter un objet blanc allonge (ticket)
         # Chercher des pixels blancs en bande verticale (ticket = rectangle blanc etroit)
-        nb_blancs = np.count_nonzero(masque_blanc)
-        ratio_blanc = nb_blancs / nb_pixels
-        if ratio_blanc > 0.3:
-            # Verifier que c'est en forme de bande (plus haut que large)
-            coords_blanc = np.where(masque_blanc)
-            if len(coords_blanc[0]) > 0:
-                y_range = coords_blanc[0].max() - coords_blanc[0].min()
-                x_range = coords_blanc[1].max() - coords_blanc[1].min()
-                if y_range > x_range * 1.5:  # Plus haut que large = ticket
-                    logger.info(f"Ticket detecte par forme: {ratio_blanc:.1%} blanc, ratio H/W={y_range}/{x_range}")
-                    return True
+        if not detecte_brut:
+            nb_blancs = np.count_nonzero(masque_blanc)
+            ratio_blanc = nb_blancs / nb_pixels
+            if ratio_blanc > 0.3:
+                coords_blanc = np.where(masque_blanc)
+                if len(coords_blanc[0]) > 0:
+                    y_range = coords_blanc[0].max() - coords_blanc[0].min()
+                    x_range = coords_blanc[1].max() - coords_blanc[1].min()
+                    if y_range > x_range * 1.5:  # Plus haut que large = ticket
+                        detecte_brut = True
+                        raison = f"forme allongee {ratio_blanc:.1%} blanc, H/W={y_range}/{x_range}"
+
+        # Confirmation par N frames consecutives positives
+        if detecte_brut:
+            self._imprimante_compteur_positif += 1
+            if self._imprimante_compteur_positif >= self._imprimante_min_frames_consecutives:
+                logger.info(
+                    f"Papier detecte dans l'imprimante (confirme apres "
+                    f"{self._imprimante_compteur_positif} frames): {raison}"
+                )
+                self._imprimante_compteur_positif = 0  # reset pour la prochaine detection
+                return True
+            else:
+                logger.debug(
+                    f"Papier candidat (frame {self._imprimante_compteur_positif}/"
+                    f"{self._imprimante_min_frames_consecutives}): {raison}"
+                )
+                return None  # En attente de confirmation
+        else:
+            self._imprimante_compteur_positif = 0  # reset si frame normale
 
         return False
 
