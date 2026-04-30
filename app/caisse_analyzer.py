@@ -164,6 +164,10 @@ class AnalyseurCaisse:
         self.cooldown = cooldown_secondes
         self.detecter_transaction_fantome = detecter_transaction_fantome
 
+        # Cache du resultat de detection visuelle pour la frame courante.
+        # Calcule une seule fois par appel a analyser(), reutilise par OBS + state machine.
+        self._ticket_visuel_cette_frame: Optional[bool] = None
+
         # Transactions actives par ID caissier
         self._transactions: Dict[int, TransactionCaisse] = {}
 
@@ -367,18 +371,14 @@ class AnalyseurCaisse:
         Detecte l'impression du ticket via 2 methodes combinees:
 
         1. Detection visuelle (prioritaire si zone imprimante configuree):
-           Compare la zone ROI de l'imprimante avec une reference.
-           Le papier ticket (blanc) qui apparait genere un changement
-           significatif de pixels clairs dans la zone.
+           Utilise le resultat cache de _detecter_papier_imprimante
+           (calcule une seule fois par frame dans analyser()).
 
         2. Analyse des mains du caissier (fallback):
            Detecte un geste de prise (descente + montee de la main).
         """
-        # Methode 1: Detection visuelle de l'imprimante (si configuree + frame dispo)
-        if self._imprimante_configuree and frame is not None:
-            resultat_visuel = self._detecter_papier_imprimante(frame, taille_frame)
-            if resultat_visuel is not None:
-                return resultat_visuel
+        if self._imprimante_configuree and self._ticket_visuel_cette_frame is not None:
+            return self._ticket_visuel_cette_frame
 
         # Methode 2: Analyse du mouvement des mains (fallback)
         return self._detecter_prise_ticket_mains(id_caissier, pose)
@@ -715,45 +715,71 @@ class AnalyseurCaisse:
         alertes = []
         maintenant = time.time()
 
-        # === OBSERVATION IMPRIMANTE INDEPENDANTE DU STATE MACHINE ===
-        # Detecte chaque ticket qui sort, meme si aucun caissier n'est track.
-        # Utile quand la detection scan-par-pose ne marche pas (ex: caissier
-        # filme de dos, hands keypoints invisibles). Log INFO a chaque detection.
-        # Le filtre HEVC + 2 frames consecutives evite les faux positifs.
+        # === DETECTION VISUELLE IMPRIMANTE (une seule fois par frame) ===
+        # Resultat cache dans _ticket_visuel_cette_frame, reutilise par
+        # l'observation OBS et par la machine a etats (via _detecter_impression_ticket).
+        self._ticket_visuel_cette_frame = None
         if self._imprimante_configuree and frame is not None:
-            ticket_observe = self._detecter_papier_imprimante(frame, taille_frame)
-            if ticket_observe:
-                logger.info(
-                    f"[IMPRIMANTE OBS] Ticket detecte (mode observation, "
-                    f"hors state machine) — {len(pistes)} pistes actives"
+            self._ticket_visuel_cette_frame = self._detecter_papier_imprimante(frame, taille_frame)
+
+        # === OBSERVATION IMPRIMANTE INDEPENDANTE DU STATE MACHINE ===
+        if self._ticket_visuel_cette_frame:
+            logger.info(
+                f"[IMPRIMANTE OBS] Ticket detecte (mode observation, "
+                f"hors state machine) — {len(pistes)} pistes actives"
+            )
+            # Sauvegarder un snapshot annote (avec cooldown anti-spam)
+            if (maintenant - self._imprimante_obs_last_snapshot_ts) >= self._imprimante_obs_snapshot_cooldown:
+                try:
+                    import os, cv2
+                    from datetime import datetime
+                    dt = datetime.now()
+                    out_dir = f"/opt/fraude/snapshots/imprimante_obs/{dt.strftime('%Y-%m-%d')}"
+                    os.makedirs(out_dir, exist_ok=True)
+                    ts = dt.strftime("%H%M%S")
+                    x1, y1, x2, y2 = self._obtenir_roi_imprimante(taille_frame)
+                    annot = frame.copy()
+                    cv2.rectangle(annot, (x1, y1), (x2, y2), (0, 255, 0), 3)
+                    cv2.putText(annot, "TICKET DETECTE", (x1, max(15, y1-8)),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                    cv2.putText(annot, dt.strftime("%Y-%m-%d %H:%M:%S"),
+                                (10, annot.shape[0]-15),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+                    path_full = f"{out_dir}/{ts}_full.jpg"
+                    cv2.imwrite(path_full, annot, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                    roi = frame[y1:y2, x1:x2]
+                    cv2.imwrite(f"{out_dir}/{ts}_roi.jpg", roi, [cv2.IMWRITE_JPEG_QUALITY, 90])
+                    self._imprimante_obs_last_snapshot_ts = maintenant
+                    logger.info(f"[IMPRIMANTE OBS] Snapshot sauvegarde: {path_full}")
+                except Exception as e:
+                    logger.warning(f"[IMPRIMANTE OBS] Echec sauvegarde snapshot: {e}")
+
+            # Alerte TICKET_SANS_CLIENT directement depuis l'OBS
+            # (fonctionne meme sans caissier identifie dans la state machine)
+            if self.detecter_transaction_fantome:
+                ticket_attendu_par_sm = any(
+                    tx.etat in (EtatTransaction.ATTENTE_TICKET, EtatTransaction.TICKET_IMPRIME)
+                    for tx in self._transactions.values()
                 )
-                # Sauvegarder un snapshot annote (avec cooldown anti-spam)
-                if (maintenant - self._imprimante_obs_last_snapshot_ts) >= self._imprimante_obs_snapshot_cooldown:
-                    try:
-                        import os, cv2
-                        from datetime import datetime
-                        dt = datetime.now()
-                        out_dir = f"/opt/fraude/snapshots/imprimante_obs/{dt.strftime('%Y-%m-%d')}"
-                        os.makedirs(out_dir, exist_ok=True)
-                        ts = dt.strftime("%H%M%S")
-                        # Annoter la frame avec la zone imprimante
-                        x1, y1, x2, y2 = self._obtenir_roi_imprimante(taille_frame)
-                        annot = frame.copy()
-                        cv2.rectangle(annot, (x1, y1), (x2, y2), (0, 255, 0), 3)
-                        cv2.putText(annot, "TICKET DETECTE", (x1, max(15, y1-8)),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-                        cv2.putText(annot, dt.strftime("%Y-%m-%d %H:%M:%S"),
-                                    (10, annot.shape[0]-15),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-                        path_full = f"{out_dir}/{ts}_full.jpg"
-                        cv2.imwrite(path_full, annot, [cv2.IMWRITE_JPEG_QUALITY, 80])
-                        # Sauvegarder aussi la ROI seule pour validation rapide
-                        roi = frame[y1:y2, x1:x2]
-                        cv2.imwrite(f"{out_dir}/{ts}_roi.jpg", roi, [cv2.IMWRITE_JPEG_QUALITY, 90])
-                        self._imprimante_obs_last_snapshot_ts = maintenant
-                        logger.info(f"[IMPRIMANTE OBS] Snapshot sauvegarde: {path_full}")
-                    except Exception as e:
-                        logger.warning(f"[IMPRIMANTE OBS] Echec sauvegarde snapshot: {e}")
+                if not ticket_attendu_par_sm:
+                    has_client = any(
+                        p for p in pistes
+                        if p.etat == "actif"
+                        and p.id_piste not in self._caissiers_potentiels
+                        and self._est_dans_zone_caisse(p.centre, taille_frame)
+                    )
+                    if not has_client:
+                        cle = (-1, TypeAlerteCaisse.TICKET_SANS_CLIENT.value)
+                        if cle not in self._derniere_alerte or maintenant - self._derniere_alerte[cle] >= self.cooldown:
+                            self._derniere_alerte[cle] = maintenant
+                            alertes.append(AlerteCaisse(
+                                type_alerte=TypeAlerteCaisse.TICKET_SANS_CLIENT,
+                                confiance=0.80,
+                                id_caissier=-1,
+                                id_client=None,
+                                description=DESCRIPTIONS_ALERTES_CAISSE[TypeAlerteCaisse.TICKET_SANS_CLIENT],
+                            ))
+                            logger.warning("ALERTE: Ticket sans client (detection visuelle OBS)")
 
         # 1. Identifier les caissiers
         ids_caissiers = self._identifier_caissiers(pistes, taille_frame)
@@ -779,7 +805,7 @@ class AnalyseurCaisse:
 
             # --- MACHINE A ETATS ---
 
-            # INACTIF -> SCAN_DETECTE
+            # INACTIF -> SCAN_DETECTE (pose) ou ATTENTE_TICKET (mode visuel)
             if tx.etat in (EtatTransaction.INACTIF, EtatTransaction.TRANSACTION_OK):
                 if self._detecter_mouvement_scan(id_caissier, pose_caissier, taille_frame):
                     tx.etat = EtatTransaction.SCAN_DETECTE
@@ -787,6 +813,16 @@ class AnalyseurCaisse:
                     tx.nb_scans += 1
                     tx.alertes_emises = []
                     logger.debug(f"Scan detecte - caissier #{id_caissier}")
+                elif self._imprimante_configuree and id_client is not None:
+                    tx.etat = EtatTransaction.ATTENTE_TICKET
+                    tx.timestamp_paiement = maintenant
+                    tx.alertes_emises = []
+                    tx.id_client = id_client
+                    tx.client_vu = True
+                    logger.info(
+                        f"Mode visuel: client #{id_client} au comptoir "
+                        f"- caissier #{id_caissier}, attente ticket"
+                    )
 
             # SCAN_DETECTE -> PAIEMENT_DETECTE (apres un delai court, on considere
             # que le paiement a eu lieu si le client est toujours la)
@@ -818,10 +854,8 @@ class AnalyseurCaisse:
                 ):
                     tx.etat = EtatTransaction.TICKET_IMPRIME
                     tx.timestamp_ticket = maintenant
-                    logger.debug(f"Ticket imprime - caissier #{id_caissier}")
+                    logger.info(f"Ticket imprime - caissier #{id_caissier}")
 
-                    # Transaction fantome: ticket imprime mais aucun client
-                    # n'a ete detecte au comptoir depuis le debut de la transaction
                     if self.detecter_transaction_fantome and not tx.client_vu:
                         alerte = self._emettre_alerte(
                             TypeAlerteCaisse.TICKET_SANS_CLIENT, tx, 0.85
@@ -833,33 +867,58 @@ class AnalyseurCaisse:
                                 f"ticket imprime sans client"
                             )
 
-                # Verifier le timeout
-                elif (
-                    tx.timestamp_paiement
-                    and maintenant - tx.timestamp_paiement > self.timeout_ticket
-                ):
-                    tx.etat = EtatTransaction.ALERTE_PAS_TICKET
-                    alerte = self._emettre_alerte(
-                        TypeAlerteCaisse.PAIEMENT_SANS_TICKET, tx, 0.8
-                    )
-                    if alerte:
-                        alertes.append(alerte)
-                        logger.warning(
-                            f"ALERTE: Paiement sans ticket - caissier #{id_caissier}"
+                elif self._imprimante_configuree:
+                    # Mode visuel: pas de timeout scan/paiement (pas fiable sans pose).
+                    # Alerte uniquement si le client quitte sans ticket.
+                    if self._client_quitte_caisse(pistes, tx.id_client, taille_frame):
+                        tx.etat = EtatTransaction.ALERTE_DEPART_SANS_TICKET
+                        alerte = self._emettre_alerte(
+                            TypeAlerteCaisse.DEPART_SANS_TICKET, tx, 0.85
+                        )
+                        if alerte:
+                            alertes.append(alerte)
+                            logger.warning(
+                                f"ALERTE: Client #{tx.id_client} quitte sans ticket - "
+                                f"caissier #{id_caissier} (mode visuel)"
+                            )
+                    # Cleanup: reset si le client est parti depuis longtemps (120s)
+                    elif (
+                        tx.timestamp_paiement
+                        and maintenant - tx.timestamp_paiement > 120.0
+                    ):
+                        logger.debug(f"Mode visuel: timeout cleanup 120s - caissier #{id_caissier}")
+                        self._transactions[id_caissier] = TransactionCaisse(
+                            id_caissier=id_caissier
                         )
 
-                # Verifier si le client part sans ticket
-                if self._client_quitte_caisse(pistes, tx.id_client, taille_frame):
-                    tx.etat = EtatTransaction.ALERTE_DEPART_SANS_TICKET
-                    alerte = self._emettre_alerte(
-                        TypeAlerteCaisse.DEPART_SANS_TICKET, tx, 0.85
-                    )
-                    if alerte:
-                        alertes.append(alerte)
-                        logger.warning(
-                            f"ALERTE: Client #{tx.id_client} quitte sans ticket - "
-                            f"caissier #{id_caissier}"
+                else:
+                    # Mode pose: timeout apres delai configurable
+                    if (
+                        tx.timestamp_paiement
+                        and maintenant - tx.timestamp_paiement > self.timeout_ticket
+                    ):
+                        tx.etat = EtatTransaction.ALERTE_PAS_TICKET
+                        alerte = self._emettre_alerte(
+                            TypeAlerteCaisse.PAIEMENT_SANS_TICKET, tx, 0.8
                         )
+                        if alerte:
+                            alertes.append(alerte)
+                            logger.warning(
+                                f"ALERTE: Paiement sans ticket - caissier #{id_caissier}"
+                            )
+
+                    # Verifier si le client part sans ticket
+                    if self._client_quitte_caisse(pistes, tx.id_client, taille_frame):
+                        tx.etat = EtatTransaction.ALERTE_DEPART_SANS_TICKET
+                        alerte = self._emettre_alerte(
+                            TypeAlerteCaisse.DEPART_SANS_TICKET, tx, 0.85
+                        )
+                        if alerte:
+                            alertes.append(alerte)
+                            logger.warning(
+                                f"ALERTE: Client #{tx.id_client} quitte sans ticket - "
+                                f"caissier #{id_caissier}"
+                            )
 
             # TICKET_IMPRIME -> TICKET_REMIS ou ALERTE (client part sans prendre)
             elif tx.etat == EtatTransaction.TICKET_IMPRIME:
@@ -872,6 +931,22 @@ class AnalyseurCaisse:
                         f"Ticket remis au client #{tx.id_client} - "
                         f"caissier #{id_caissier}"
                     )
+
+                elif self._imprimante_configuree:
+                    # Mode visuel: auto-complete apres 5s (pas de pose pour
+                    # detecter la remise physique du ticket)
+                    if (
+                        tx.timestamp_ticket
+                        and maintenant - tx.timestamp_ticket > 5.0
+                    ):
+                        tx.etat = EtatTransaction.TRANSACTION_OK
+                        logger.info(
+                            f"Transaction complete (mode visuel) - "
+                            f"caissier #{id_caissier}, client #{tx.id_client}"
+                        )
+                        self._transactions[id_caissier] = TransactionCaisse(
+                            id_caissier=id_caissier
+                        )
 
                 # Client part avant que le ticket soit remis
                 elif self._client_quitte_caisse(pistes, tx.id_client, taille_frame):
