@@ -153,7 +153,10 @@ class AnalyseurCaisse:
         # (un seul frame qui declenche peut etre une corruption de decode RTSP).
         # On ne valide qu'apres N frames consecutives.
         self._imprimante_compteur_positif: int = 0
-        self._imprimante_min_frames_consecutives: int = 2
+        # Min frames consecutives requises avant de declencher (1 = pas de filtre,
+        # 2 = strict mais peut rater des tickets brefs, vu que YOLO tourne ~1-2fps).
+        # On garde 1 + sanity HEVC qui suffit pour filtrer les glitches.
+        self._imprimante_min_frames_consecutives: int = 1
         self.nb_cycles_scan_min = nb_cycles_scan_min
         self.cooldown = cooldown_secondes
         self.detecter_transaction_fantome = detecter_transaction_fantome
