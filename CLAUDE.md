@@ -16,41 +16,49 @@ docker compose up -d --build
 | Hardware | ThinkPad T480s, i7-8650U @ 1.90 GHz, 16 GB RAM, NVMe Intel 256 GB |
 | BIOS | Phoenix SecureCore 1.49 (2021) — **bug NVRAM**, contourne via Microsoft Hack |
 | OS | Ubuntu Server 24.04 LTS (install manuel via cle USB GPT/UEFI) |
-| Hostname | fraude |
-| User Linux | fraude |
+| Hostname | **pos-pc** (anciennement `fraude`, renomme le 30 avril 2026) |
+| User Linux principal | **`super`** (anciennement `fraude` UID 1000) — owner de `/home/super/`, app, group docker |
+| User Linux admin | **`admin`** (UID 1001, sudo + docker) — pour gestion sans toucher au compte applicatif |
 | Methode deployment | Package `fraude-package.tar.gz` (3.3 GB) + `install.sh` |
 | Date deployment initial | 26 avril 2026 |
 | WiFi interface | wlp61s0 (Intel AC 8265) |
 | Reseau actuel | WiFi (ethernet seulement utilise pour install initial) |
 | IP locale (LAN WiFi) | dynamique via DHCP (peut changer apres reboot) |
 | **IP Tailscale (fixe)** | **100.123.127.5** |
-| Hostname Tailscale | fraude |
+| Hostname Tailscale | **pos-pc** |
 | Acces remote | Tailscale (gratuit, peer-to-peer, pas de port forwarding) |
-| Cameras configurees | 7 dans `data/fraude.db` |
-| Cameras actives | 2 (Caisse en mode caisse + CAM5 en mode vol) |
-| Cameras inactives | 5 (CAM1, CAM2, CAM4, CAM6, CAM8) — a activer selon CPU |
-| NVR magasin | Hikvision sur 192.168.1.5 (Caisse) et 192.168.1.3 (autres) |
+| Cameras configurees | 23 dans `data/fraude.db` (16 channels du DVR principal + 7 anciennes entrees conservees) |
+| Cameras actives | 1 (`Cam06_Caisse_DVR6` en mode caisse, DVR 6 ch 601 — POS detecte) |
+| NVR magasin | **Hikvision DS-7216HGHI-K1 (16 ch)** sur **`192.168.100.6`** — login `admin` / `Dvr24434` (D maj). Anciens DVR `192.168.100.79` (vide depuis 23-oct-2025) et `192.168.100.110` (8 ch, mais surtout entrepots) inutilises. Roles tagges : Cam06 ch 601 = imprimante (bbox 573,394-650,540 px). |
 | Microsoft Hack applique | Oui (`/EFI/Microsoft/Boot/bootmgfw.efi` = shimx64.efi Ubuntu) |
 | Tunings appliques | Lid switch ignore + CPU governor performance + cpupower.service |
 | Telegram bot | **Configure** : @Frdclt001_bot (id 8595839140) → chat `6119440920` (Mh Mj). Token + chat_id stockes dans `parametres` table cat `telegram` (pas dans `.env`). |
 | Repo source code | **https://github.com/MHDWY/fraude** (prive) — deploy key SSH `~/.ssh/github_deploy` sur magasin, read-only |
-| Workflow correctifs | Volume mount `/home/fraude/fraude-src/{app,dashboard}` → `/opt/fraude/{app,dashboard}` (ro), patch via `git pull` + `docker compose restart` (~30s, no rebuild) |
+| Workflow correctifs | Volume mount `/home/super/fraude-src/{app,dashboard}` → `/opt/fraude/{app,dashboard}` (ro), patch via `git pull` + `docker compose restart` (~30s, no rebuild) |
 | Admin dashboard | Onglet protege par mot de passe (param DB `admin_password`, defaut `asx`, modifiable via Systeme tab) |
 
 **Acces post-deployment :**
-- Dashboard : http://100.123.127.5:8502 (ou http://fraude:8502 si MagicDNS active)
-- Cockpit : https://100.123.127.5:9090 (login Linux : `fraude` / `asx`)
-- SSH : `ssh fraude` (alias dans `~/.ssh/config`, **auth par cle ed25519 — passwordless**)
+- Dashboard : http://100.123.127.5:8502 (ou http://pos-pc:8502 si MagicDNS active)
+- Cockpit : https://100.123.127.5:9090 (login Linux : `super` / `asx`, ou `admin` / `asx`)
+- SSH applicatif : `ssh fraude` ou `ssh pos-pc` (alias `~/.ssh/config`, connecte en `super@pos-pc` via cle ed25519)
+- SSH admin/gestion : `ssh admin-fraude` (connecte en `admin@pos-pc`, mot de passe sudo : `asx`)
 - MJPEG : http://100.123.127.5:8555/stream
 
 **Setup SSH (deja fait sur le poste mhilali Windows, 26 avril 2026) :**
 - Cle locale : `~/.ssh/id_ed25519` (sans passphrase)
-- Cle publique deployee dans `/home/fraude/.ssh/authorized_keys` sur le magasin
-- Alias `~/.ssh/config` :
+- Cle publique deployee dans `/home/super/.ssh/authorized_keys` ET `/home/admin/.ssh/authorized_keys` sur le magasin
+- Alias `~/.ssh/config` (3 entrees) :
   ```
-  Host fraude
+  Host fraude pos-pc
       HostName 100.123.127.5
-      User fraude
+      User super
+      IdentityFile ~/.ssh/id_ed25519
+      IdentitiesOnly yes
+      ServerAliveInterval 30
+
+  Host admin-fraude
+      HostName 100.123.127.5
+      User admin
       IdentityFile ~/.ssh/id_ed25519
       IdentitiesOnly yes
       ServerAliveInterval 30
@@ -68,10 +76,10 @@ Le code Python est embarque dans l'image Docker, mais on monte le dossier `app/`
 /opt/fraude/                              # install package (gere par install.sh)
 ├── docker-compose.yml                    # version magasin (image: pre-construite)
 ├── docker-compose.override.yml           # LOCAL au magasin, NON commite
-│                                         # → mount /home/fraude/fraude-src/app et /dashboard
+│                                         # → mount /home/super/fraude-src/app et /dashboard
 ├── .env, data/, recordings/, snapshots/, sounds/, models/
 
-/home/fraude/fraude-src/                  # git clone read-only de github.com/MHDWY/fraude
+/home/super/fraude-src/                  # git clone read-only de github.com/MHDWY/fraude
 ├── app/, dashboard/, scripts/, deploy/, ...
 
 /etc/systemd/system/fraude.service.d/
@@ -118,7 +126,7 @@ ssh fraude "cd ~/fraude-src && git pull && cd /opt/fraude && docker compose rest
 **Limites a connaitre :**
 - Le `.env`, la DB, les modeles ONNX ne sont **pas** dans git → modifs de config se font via le dashboard Admin ou directement sur le magasin.
 - Si tu modifies `Dockerfile`, `requirements.txt` ou les modeles → necessite un rebuild d'image complet (workflow package installer, pas hotfix).
-- Si le package installer (`fraude-package.tar.gz`) est re-deploye, il ecrase `/opt/fraude/` → l'override.yml est perdu, il faut le recreer (les patches du code restent dans `/home/fraude/fraude-src/` qui n'est pas touche par le package).
+- Si le package installer (`fraude-package.tar.gz`) est re-deploye, il ecrase `/opt/fraude/` → l'override.yml est perdu, il faut le recreer (les patches du code restent dans `/home/super/fraude-src/` qui n'est pas touche par le package).
 - L'override.yml et le drop-in systemd ne sont pas dans git → si on remonte un nouveau magasin il faudra les recreer (a integrer dans `install.sh` plus tard).
 
 ## Architecture
