@@ -157,6 +157,9 @@ class AnalyseurCaisse:
         # 2 = strict mais peut rater des tickets brefs, vu que YOLO tourne ~1-2fps).
         # On garde 1 + sanity HEVC qui suffit pour filtrer les glitches.
         self._imprimante_min_frames_consecutives: int = 1
+        # Timestamp du dernier snapshot OBS sauvegarde (cooldown anti-spam)
+        self._imprimante_obs_last_snapshot_ts: float = 0.0
+        self._imprimante_obs_snapshot_cooldown: float = 10.0  # secondes
         self.nb_cycles_scan_min = nb_cycles_scan_min
         self.cooldown = cooldown_secondes
         self.detecter_transaction_fantome = detecter_transaction_fantome
@@ -724,6 +727,33 @@ class AnalyseurCaisse:
                     f"[IMPRIMANTE OBS] Ticket detecte (mode observation, "
                     f"hors state machine) — {len(pistes)} pistes actives"
                 )
+                # Sauvegarder un snapshot annote (avec cooldown anti-spam)
+                if (maintenant - self._imprimante_obs_last_snapshot_ts) >= self._imprimante_obs_snapshot_cooldown:
+                    try:
+                        import os, cv2
+                        from datetime import datetime
+                        dt = datetime.now()
+                        out_dir = f"/opt/fraude/snapshots/imprimante_obs/{dt.strftime('%Y-%m-%d')}"
+                        os.makedirs(out_dir, exist_ok=True)
+                        ts = dt.strftime("%H%M%S")
+                        # Annoter la frame avec la zone imprimante
+                        x1, y1, x2, y2 = self._obtenir_roi_imprimante(taille_frame)
+                        annot = frame.copy()
+                        cv2.rectangle(annot, (x1, y1), (x2, y2), (0, 255, 0), 3)
+                        cv2.putText(annot, "TICKET DETECTE", (x1, max(15, y1-8)),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                        cv2.putText(annot, dt.strftime("%Y-%m-%d %H:%M:%S"),
+                                    (10, annot.shape[0]-15),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+                        path_full = f"{out_dir}/{ts}_full.jpg"
+                        cv2.imwrite(path_full, annot, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                        # Sauvegarder aussi la ROI seule pour validation rapide
+                        roi = frame[y1:y2, x1:x2]
+                        cv2.imwrite(f"{out_dir}/{ts}_roi.jpg", roi, [cv2.IMWRITE_JPEG_QUALITY, 90])
+                        self._imprimante_obs_last_snapshot_ts = maintenant
+                        logger.info(f"[IMPRIMANTE OBS] Snapshot sauvegarde: {path_full}")
+                    except Exception as e:
+                        logger.warning(f"[IMPRIMANTE OBS] Echec sauvegarde snapshot: {e}")
 
         # 1. Identifier les caissiers
         ids_caissiers = self._identifier_caissiers(pistes, taille_frame)
