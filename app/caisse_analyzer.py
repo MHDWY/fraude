@@ -128,6 +128,9 @@ class AnalyseurCaisse:
         imprimante_drift_consecutive: int = 3,
         imprimante_drift_cooldown: int = 3600,
         imprimante_drift_dir: str = "/opt/fraude/snapshots/imprimante_drift",
+        imprimante_telegram_alerte_enabled: bool = True,
+        imprimante_telegram_cooldown: float = 30.0,
+        imprimante_telegram_chat_override: str = "",
         detecter_transaction_fantome: bool = True,
     ):
         """
@@ -160,6 +163,12 @@ class AnalyseurCaisse:
             imprimante_drift_consecutive: checks consecutifs sous seuil pour alerte (defaut 3).
             imprimante_drift_cooldown: cooldown (s) entre alertes drift envoyees (defaut 3600=1h).
             imprimante_drift_dir: repertoire pour reference + snapshots drift.
+            imprimante_telegram_alerte_enabled: envoie une alerte Telegram a chaque
+                                                 detection ticket retenue (defaut True).
+            imprimante_telegram_cooldown: cooldown (s) entre 2 alertes Telegram ticket
+                                          (defaut 30, separe du cooldown QW3 4s).
+            imprimante_telegram_chat_override: chat_id alternatif pour les alertes ticket.
+                                               Vide = routage standard via camera+config.
         """
         self.timeout_ticket = timeout_ticket_secondes
         self.zone_caisse_y_min_pct = zone_caisse_y_min_pct
@@ -248,6 +257,25 @@ class AnalyseurCaisse:
                 f"[DRIFT] detection drift activee: interval={self._drift_check_interval}s "
                 f"seuil={self._drift_threshold} consecutif={self._drift_consecutive_required} "
                 f"cooldown={self._drift_cooldown}s ref={self._drift_ref_path}"
+            )
+
+        # === Telegram alerte detection ticket retenue ===
+        self._telegram_alerte_enabled = bool(imprimante_telegram_alerte_enabled)
+        self._telegram_cooldown = max(0.0, float(imprimante_telegram_cooldown))
+        self._telegram_chat_override = (imprimante_telegram_chat_override or "").strip()
+        self._telegram_last_alert_ts: float = 0.0
+        self._ticket_telegram_callback: Optional[
+            Callable[[float, str, Optional[str], Optional[str]], bool]
+        ] = None
+        # Capture du ratio_papier et de la raison du dernier True confirme
+        # (consomme par l'alerte Telegram).
+        self._imprimante_last_ratio: float = 0.0
+        self._imprimante_last_raison: str = ""
+        if self._telegram_alerte_enabled and imprimante_bbox:
+            logger.info(
+                f"[TICKET_TG] alerte Telegram ticket activee: "
+                f"cooldown={self._telegram_cooldown}s "
+                f"chat_override={'(none)' if not self._telegram_chat_override else self._telegram_chat_override}"
             )
         self.nb_cycles_scan_min = nb_cycles_scan_min
         self.cooldown = cooldown_secondes
@@ -656,6 +684,9 @@ class AnalyseurCaisse:
                 )
                 self._imprimante_compteur_positif = 0  # reset pour la prochaine detection
                 self._imprimante_last_detection_ts = maintenant
+                # Capture pour l'alerte Telegram (consomme dans analyser())
+                self._imprimante_last_ratio = float(ratio_papier)
+                self._imprimante_last_raison = raison
                 return True
             else:
                 logger.debug(
@@ -778,6 +809,117 @@ class AnalyseurCaisse:
             f"{ratio_inclus:.0%} des pixels inclus dans la detection"
         )
         return mask
+
+    # ------------------------------------------------------------------
+    # Snapshot OBS imprimante (helper partage OBS + Telegram)
+    # ------------------------------------------------------------------
+
+    def _sauvegarder_snapshot_imprimante(
+        self,
+        frame: np.ndarray,
+        taille_frame: Tuple[int, int],
+    ) -> Tuple[Optional[str], Optional[str]]:
+        """Sauvegarde 2 fichiers JPEG: frame complete annotee + ROI seule.
+
+        Retourne (path_full, path_roi) ou (None, None) sur erreur.
+        Idempotent au seuil seconde: si appele 2x dans la meme seconde,
+        ecrase les memes paths (ts en HHMMSS).
+        """
+        try:
+            import os, cv2
+            from datetime import datetime
+            dt = datetime.now()
+            out_dir = f"/opt/fraude/snapshots/imprimante_obs/{dt.strftime('%Y-%m-%d')}"
+            os.makedirs(out_dir, exist_ok=True)
+            ts = dt.strftime("%H%M%S")
+            x1, y1, x2, y2 = self._obtenir_roi_imprimante(taille_frame)
+            annot = frame.copy()
+            cv2.rectangle(annot, (x1, y1), (x2, y2), (0, 255, 0), 3)
+            cv2.putText(annot, "TICKET DETECTE", (x1, max(15, y1 - 8)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            cv2.putText(annot, dt.strftime("%Y-%m-%d %H:%M:%S"),
+                        (10, annot.shape[0] - 15),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+            path_full = f"{out_dir}/{ts}_full.jpg"
+            cv2.imwrite(path_full, annot, [cv2.IMWRITE_JPEG_QUALITY, 80])
+            roi = frame[y1:y2, x1:x2]
+            path_roi = f"{out_dir}/{ts}_roi.jpg"
+            cv2.imwrite(path_roi, roi, [cv2.IMWRITE_JPEG_QUALITY, 90])
+            return path_full, path_roi
+        except Exception as e:
+            logger.warning(f"[IMPRIMANTE OBS] Echec sauvegarde snapshot: {e}")
+            return None, None
+
+    # ------------------------------------------------------------------
+    # Telegram alerte detection ticket retenue
+    # ------------------------------------------------------------------
+
+    def configurer_ticket_telegram_callback(
+        self,
+        callback: Callable[[float, str, Optional[str], Optional[str]], bool],
+    ) -> None:
+        """Injection du callback Telegram pour les alertes ticket retenu.
+
+        Signature: (ratio: float, raison: str, path_roi, path_full) -> bool
+        Retourne True si l'envoi a reussi (cooldown demarre), False sinon.
+        """
+        self._ticket_telegram_callback = callback
+
+    def _declencher_alerte_telegram_ticket(
+        self,
+        frame: np.ndarray,
+        taille_frame: Tuple[int, int],
+        maintenant: float,
+        paths_obs: Tuple[Optional[str], Optional[str]],
+    ) -> None:
+        """Envoie une alerte Telegram pour la detection ticket courante.
+
+        Cooldown 30s par defaut (configurable). Reutilise les snapshots OBS
+        si OBS vient de les sauver, sinon en sauve de nouveaux. Si Telegram
+        echoue ou callback absent, log warn + ne demarre pas le cooldown
+        (retry au prochain ticket).
+        """
+        if not self._telegram_alerte_enabled:
+            return
+
+        # Cooldown 30s (separe du QW3 4s pour eviter spam Telegram)
+        if (
+            self._telegram_last_alert_ts > 0
+            and (maintenant - self._telegram_last_alert_ts) < self._telegram_cooldown
+        ):
+            return
+
+        # Reutilise les snapshots OBS si OBS vient de les sauver, sinon save fresh
+        path_full, path_roi = paths_obs
+        if not path_full or not path_roi:
+            path_full, path_roi = self._sauvegarder_snapshot_imprimante(frame, taille_frame)
+
+        if not self._ticket_telegram_callback:
+            logger.warning("[TICKET_TG] callback Telegram non configure, alerte loggee uniquement")
+            return
+
+        try:
+            success = bool(self._ticket_telegram_callback(
+                float(self._imprimante_last_ratio),
+                str(self._imprimante_last_raison),
+                path_roi,
+                path_full,
+            ))
+        except Exception as e:
+            logger.error(f"[TICKET_TG] callback exception: {e}")
+            success = False
+
+        if success:
+            self._telegram_last_alert_ts = maintenant
+            logger.info(
+                f"[TICKET_TG] alerte envoyee, cooldown {self._telegram_cooldown:.0f}s demarre "
+                f"(ratio={self._imprimante_last_ratio:.1%}, raison={self._imprimante_last_raison})"
+            )
+        else:
+            logger.warning(
+                "[TICKET_TG] envoi Telegram echec/absent, alerte sera retentee au prochain ticket "
+                "(cooldown non demarre)"
+            )
 
     # ------------------------------------------------------------------
     # Drift detection (deplacement physique imprimante)
@@ -1196,30 +1338,18 @@ class AnalyseurCaisse:
                 f"hors state machine) — {len(pistes)} pistes actives"
             )
             # Sauvegarder un snapshot annote (avec cooldown anti-spam)
+            paths_snapshot: Tuple[Optional[str], Optional[str]] = (None, None)
             if (maintenant - self._imprimante_obs_last_snapshot_ts) >= self._imprimante_obs_snapshot_cooldown:
-                try:
-                    import os, cv2
-                    from datetime import datetime
-                    dt = datetime.now()
-                    out_dir = f"/opt/fraude/snapshots/imprimante_obs/{dt.strftime('%Y-%m-%d')}"
-                    os.makedirs(out_dir, exist_ok=True)
-                    ts = dt.strftime("%H%M%S")
-                    x1, y1, x2, y2 = self._obtenir_roi_imprimante(taille_frame)
-                    annot = frame.copy()
-                    cv2.rectangle(annot, (x1, y1), (x2, y2), (0, 255, 0), 3)
-                    cv2.putText(annot, "TICKET DETECTE", (x1, max(15, y1-8)),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-                    cv2.putText(annot, dt.strftime("%Y-%m-%d %H:%M:%S"),
-                                (10, annot.shape[0]-15),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-                    path_full = f"{out_dir}/{ts}_full.jpg"
-                    cv2.imwrite(path_full, annot, [cv2.IMWRITE_JPEG_QUALITY, 80])
-                    roi = frame[y1:y2, x1:x2]
-                    cv2.imwrite(f"{out_dir}/{ts}_roi.jpg", roi, [cv2.IMWRITE_JPEG_QUALITY, 90])
+                paths_snapshot = self._sauvegarder_snapshot_imprimante(frame, taille_frame)
+                if paths_snapshot[0]:
                     self._imprimante_obs_last_snapshot_ts = maintenant
-                    logger.info(f"[IMPRIMANTE OBS] Snapshot sauvegarde: {path_full}")
-                except Exception as e:
-                    logger.warning(f"[IMPRIMANTE OBS] Echec sauvegarde snapshot: {e}")
+                    logger.info(f"[IMPRIMANTE OBS] Snapshot sauvegarde: {paths_snapshot[0]}")
+
+            # Alerte Telegram (cooldown independent 30s, reutilise paths_snapshot
+            # si OBS vient de les sauver, sinon save fresh dans le helper).
+            self._declencher_alerte_telegram_ticket(
+                frame, taille_frame, maintenant, paths_snapshot
+            )
 
             # Note: TICKET_SANS_CLIENT n'est PAS genere ici depuis l'OBS.
             # YOLO ne detecte pas fiablement les personnes depuis l'angle caisse

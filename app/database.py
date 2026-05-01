@@ -291,6 +291,9 @@ class BaseDonneesFraude:
                 ("imprimante_drift_threshold", "0.70", "caisse", "Seuil de score de similarite (0-1) sous lequel un check est considere drift. Plus bas = plus tolerant.", "float"),
                 ("imprimante_drift_consecutive", "3", "caisse", "Nombre de checks consecutifs sous seuil pour declencher l'alerte drift.", "int"),
                 ("imprimante_drift_cooldown", "3600", "caisse", "Cooldown (s) entre 2 alertes drift envoyees a Telegram.", "int"),
+                ("imprimante_telegram_alerte_enabled", "true", "caisse", "Active l'alerte Telegram a chaque detection ticket retenue (passe QW1+QW2+QW3).", "bool"),
+                ("imprimante_telegram_cooldown", "30.0", "caisse", "Cooldown (s) entre 2 alertes Telegram detection ticket. Independant du cooldown QW3 4s.", "float"),
+                ("imprimante_telegram_chat_override", "", "caisse", "chat_id Telegram alternatif pour les alertes ticket. Vide = utilise destinataires camera + telegram_chat_id global.", "str"),
                 ("caisse_detecter_transaction_fantome", "true", "caisse", "Activer la detection de transaction fantome (ticket imprime sans client)", "bool"),
                 ("mannequin_seuil_immobilite_sec", "30", "detection", "Duree d'immobilite (sec) avant de considerer une piste comme mannequin", "float"),
                 # Vol - Cacher article sous vetements

@@ -147,14 +147,19 @@ class CameraWorker:
             imprimante_drift_threshold=float(db.obtenir_parametre("imprimante_drift_threshold", 0.70)),
             imprimante_drift_consecutive=int(db.obtenir_parametre("imprimante_drift_consecutive", 3)),
             imprimante_drift_cooldown=int(db.obtenir_parametre("imprimante_drift_cooldown", 3600)),
+            imprimante_telegram_alerte_enabled=bool(db.obtenir_parametre("imprimante_telegram_alerte_enabled", True)),
+            imprimante_telegram_cooldown=float(db.obtenir_parametre("imprimante_telegram_cooldown", 30.0)),
+            imprimante_telegram_chat_override=str(db.obtenir_parametre("imprimante_telegram_chat_override", "")),
             detecter_transaction_fantome=bool(db.obtenir_parametre("caisse_detecter_transaction_fantome", True)),
         )
 
-        # Wire callback Telegram pour les alertes drift imprimante
-        # Synchrone (drift max 1x/h) — retourne True si envoi a reussi.
+        # Wire callback Telegram pour les alertes drift imprimante (sync, max 1x/h)
         if self.alertes_manager is not None:
             self.analyseur_caisse.configurer_drift_callback(
                 self._drift_envoyer_telegram
+            )
+            self.analyseur_caisse.configurer_ticket_telegram_callback(
+                self._ticket_envoyer_telegram
             )
 
         # Enregistreur video specifique a cette camera
@@ -271,6 +276,59 @@ class CameraWorker:
     # ------------------------------------------------------------------
     # Boucle principale
     # ------------------------------------------------------------------
+
+    def _ticket_envoyer_telegram(
+        self,
+        ratio: float,
+        raison: str,
+        path_roi: Optional[str],
+        path_full: Optional[str],
+    ) -> bool:
+        """Callback synchrone pour les alertes Telegram detection ticket retenue.
+
+        Envoie le message texte + le snapshot frame complete (avec bbox annotee).
+        Si pas de snapshot, fallback texte seul. Retourne True si au moins
+        1 destinataire a recu (cooldown demarre cote analyseur).
+        """
+        if self.alertes_manager is None:
+            return False
+
+        # Resolution destinataires: override DB > destinataires camera > default config
+        override = self.analyseur_caisse._telegram_chat_override
+        if override:
+            chat_ids: Optional[List[str]] = [override]
+        else:
+            try:
+                chat_ids = self.alertes_manager._obtenir_destinataires_telegram(self.camera_id)
+            except Exception as e:
+                logger.warning(f"[TICKET_TG] resolution destinataires echouee: {e}")
+                chat_ids = None
+
+        if not chat_ids:
+            logger.warning("[TICKET_TG] aucun destinataire Telegram")
+            return False
+
+        # Heure UTC + locale Maroc (UTC+1 hors Ramadan, sinon UTC)
+        from datetime import datetime, timezone, timedelta
+        now_utc = datetime.now(timezone.utc)
+        now_maroc = now_utc.astimezone(timezone(timedelta(hours=1)))
+        text = (
+            f"🎫 *TICKET DETECTE*\n\n"
+            f"*Heure :* `{now_utc.strftime('%Y-%m-%d %H:%M:%S')} UTC` "
+            f"(`{now_maroc.strftime('%H:%M')}` Maroc)\n"
+            f"*Camera :* `{self.camera_nom}`\n"
+            f"*Ratio papier :* `{ratio:.1%}`\n"
+            f"*Detail :* {raison or '(n/a)'}\n"
+        )
+
+        # Telegram preferera la frame complete (contexte utile pour labelisation
+        # TP/FP). Fallback ROI si pas de full, sinon texte seul.
+        photo_path = path_full or path_roi or None
+        return self.alertes_manager.envoyer_message_telegram(
+            text=text,
+            chemin_photo=photo_path,
+            chat_ids=chat_ids,
+        )
 
     def _drift_envoyer_telegram(
         self, score: float, chemin_image: str, ts: str
