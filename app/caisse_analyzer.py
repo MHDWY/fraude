@@ -120,6 +120,8 @@ class AnalyseurCaisse:
         imprimante_mode_detection: str = "hsv",
         imprimante_seuil_saturation: int = 40,
         imprimante_seuil_valeur: int = 180,
+        imprimante_min_frames_consecutives: int = 2,
+        imprimante_cooldown_detection: float = 4.0,
         detecter_transaction_fantome: bool = True,
     ):
         """
@@ -142,6 +144,10 @@ class AnalyseurCaisse:
                                        (luminance > seuil_blanc, comportement legacy).
             imprimante_seuil_saturation: mode HSV uniquement, S MAX (0-255), defaut 40.
             imprimante_seuil_valeur: mode HSV uniquement, V MIN (0-255), defaut 180.
+            imprimante_min_frames_consecutives: nombre de frames consecutives positives
+                                                 pour confirmer une detection (defaut 2).
+            imprimante_cooldown_detection: cooldown (s) entre 2 detections positives
+                                           du papier imprimante (defaut 4.0).
         """
         self.timeout_ticket = timeout_ticket_secondes
         self.zone_caisse_y_min_pct = zone_caisse_y_min_pct
@@ -193,10 +199,18 @@ class AnalyseurCaisse:
         # (un seul frame qui declenche peut etre une corruption de decode RTSP).
         # On ne valide qu'apres N frames consecutives.
         self._imprimante_compteur_positif: int = 0
-        # Min frames consecutives requises avant de declencher (1 = pas de filtre,
-        # 2 = strict mais peut rater des tickets brefs, vu que YOLO tourne ~1-2fps).
-        # On garde 1 + sanity HEVC qui suffit pour filtrer les glitches.
-        self._imprimante_min_frames_consecutives: int = 1
+        # QW3: min frames consecutives configurable en DB.
+        # 1 = pas de filtre (mais expose aux corruptions HEVC),
+        # 2 = strict (defaut, filtre les glitches).
+        self._imprimante_min_frames_consecutives: int = max(
+            1, int(imprimante_min_frames_consecutives)
+        )
+        # QW3: cooldown entre 2 detections positives confirmees (s).
+        # Independant du cooldown OBS snapshot (qui gate les fichiers disque).
+        self._imprimante_cooldown_detection: float = max(
+            0.0, float(imprimante_cooldown_detection)
+        )
+        self._imprimante_last_detection_ts: float = 0.0
         # Timestamp du dernier snapshot OBS sauvegarde (cooldown anti-spam)
         self._imprimante_obs_last_snapshot_ts: float = 0.0
         self._imprimante_obs_snapshot_cooldown: float = 10.0  # secondes
@@ -587,11 +601,26 @@ class AnalyseurCaisse:
         if detecte_brut:
             self._imprimante_compteur_positif += 1
             if self._imprimante_compteur_positif >= self._imprimante_min_frames_consecutives:
+                # QW3: cooldown entre 2 detections positives confirmees
+                temps_depuis_derniere = maintenant - self._imprimante_last_detection_ts
+                if (
+                    self._imprimante_cooldown_detection > 0.0
+                    and self._imprimante_last_detection_ts > 0.0
+                    and temps_depuis_derniere < self._imprimante_cooldown_detection
+                ):
+                    logger.info(
+                        f"[QW3] Detection positive confirmee mais filtree par "
+                        f"cooldown ({temps_depuis_derniere:.1f}s < "
+                        f"{self._imprimante_cooldown_detection:.1f}s): {raison}"
+                    )
+                    self._imprimante_compteur_positif = 0
+                    return False
                 logger.info(
                     f"Papier detecte dans l'imprimante (confirme apres "
                     f"{self._imprimante_compteur_positif} frames): {raison}"
                 )
                 self._imprimante_compteur_positif = 0  # reset pour la prochaine detection
+                self._imprimante_last_detection_ts = maintenant
                 return True
             else:
                 logger.debug(

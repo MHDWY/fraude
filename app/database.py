@@ -284,6 +284,8 @@ class BaseDonneesFraude:
                 ("imprimante_mode_detection", "hsv", "caisse", "Mode de classification 'pixel blanc' dans la ROI imprimante: 'hsv' (S faible + V eleve) ou 'gray' (luminance > seuil).", "str"),
                 ("imprimante_seuil_saturation", "40", "caisse", "Mode HSV: saturation MAX (0-255) pour considerer un pixel comme blanc/papier. Plus bas = plus strict.", "int"),
                 ("imprimante_seuil_valeur", "180", "caisse", "Mode HSV: valeur (luminosite) MIN (0-255) pour considerer un pixel comme blanc/papier.", "int"),
+                ("imprimante_min_frames_consecutives", "2", "caisse", "Nombre de frames consecutives positives pour confirmer une detection ticket. 1=relax, 2=strict (filtre glitches HEVC).", "int"),
+                ("imprimante_cooldown_detection", "4.0", "caisse", "Cooldown (s) entre 2 detections positives consecutives du papier imprimante. Independant du cooldown OBS snapshot.", "float"),
                 ("caisse_detecter_transaction_fantome", "true", "caisse", "Activer la detection de transaction fantome (ticket imprime sans client)", "bool"),
                 ("mannequin_seuil_immobilite_sec", "30", "detection", "Duree d'immobilite (sec) avant de considerer une piste comme mannequin", "float"),
                 # Vol - Cacher article sous vetements

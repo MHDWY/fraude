@@ -140,6 +140,8 @@ class CameraWorker:
             imprimante_mode_detection=str(db.obtenir_parametre("imprimante_mode_detection", "hsv")),
             imprimante_seuil_saturation=int(db.obtenir_parametre("imprimante_seuil_saturation", 40)),
             imprimante_seuil_valeur=int(db.obtenir_parametre("imprimante_seuil_valeur", 180)),
+            imprimante_min_frames_consecutives=int(db.obtenir_parametre("imprimante_min_frames_consecutives", 2)),
+            imprimante_cooldown_detection=float(db.obtenir_parametre("imprimante_cooldown_detection", 4.0)),
             detecter_transaction_fantome=bool(db.obtenir_parametre("caisse_detecter_transaction_fantome", True)),
         )
 
