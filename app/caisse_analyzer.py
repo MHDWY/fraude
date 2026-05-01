@@ -116,6 +116,7 @@ class AnalyseurCaisse:
         imprimante_seuil_blanc: int = 200,
         imprimante_seuil_changement: float = 0.15,
         imprimante_bbox: Optional[tuple] = None,
+        imprimante_mask_polygon: Optional[List[Tuple[float, float]]] = None,
         detecter_transaction_fantome: bool = True,
     ):
         """
@@ -130,6 +131,10 @@ class AnalyseurCaisse:
             imprimante_seuil_blanc: Valeur min de luminosite pour considerer un pixel comme blanc
             imprimante_seuil_changement: % min de pixels changes pour detecter du papier
             imprimante_bbox: Bbox absolue (x1,y1,x2,y2) depuis objets_reference (calibration visuelle)
+            imprimante_mask_polygon: Polygone (liste de (x,y) en proportions de la ROI, 0.0-1.0)
+                                     definissant les pixels A INCLURE dans la detection.
+                                     Permet d'exclure la zone ou la main du caissier passe regulierement.
+                                     None ou vide = ROI complete (comportement legacy).
         """
         self.timeout_ticket = timeout_ticket_secondes
         self.zone_caisse_y_min_pct = zone_caisse_y_min_pct
@@ -145,6 +150,19 @@ class AnalyseurCaisse:
         self._imprimante_configuree = imprimante_bbox is not None
         if imprimante_bbox:
             logger.info(f"Imprimante configuree via objets_reference: bbox={imprimante_bbox}")
+
+        # QW1: polygone de masque (ROI-relatif) pour exclure la zone main du caissier.
+        # Stocke comme liste de tuples (x_pct, y_pct), 0.0-1.0. Vide = ROI complete.
+        self._imprimante_mask_polygon: Optional[List[Tuple[float, float]]] = (
+            list(imprimante_mask_polygon) if imprimante_mask_polygon else None
+        )
+        # Cache du masque binaire (uint8) recalcule si la shape de ROI change.
+        self._imprimante_mask: Optional[np.ndarray] = None
+        self._imprimante_mask_shape: Optional[Tuple[int, int]] = None
+        if self._imprimante_mask_polygon:
+            logger.info(
+                f"[QW1] Mask polygon configure: {len(self._imprimante_mask_polygon)} points"
+            )
 
         # Frame de reference de la zone imprimante (sans papier)
         self._imprimante_ref: Optional[np.ndarray] = None
@@ -454,11 +472,35 @@ class AnalyseurCaisse:
         masque_blanc = roi_gris > self.imprimante_seuil_blanc  # Pixel clair
         masque_papier = masque_change & masque_blanc
 
-        # Ratio de pixels "papier" dans la zone
-        nb_pixels = roi_gris.size
+        # QW1: appliquer le masque de polygone (exclure zone main caissier).
+        # On sauvegarde le ratio non-masque pour logger l'impact du QW1 a posteriori.
+        ratio_papier_unmasked = float(
+            np.count_nonzero(masque_papier) / max(roi_gris.size, 1)
+        )
+        mask_inclus = self._obtenir_mask_imprimante(roi_gris.shape)
+        if mask_inclus is not None:
+            mask_bool = mask_inclus.astype(bool)
+            masque_change = masque_change & mask_bool
+            masque_blanc = masque_blanc & mask_bool
+            masque_papier = masque_papier & mask_bool
+            nb_pixels = int(np.count_nonzero(mask_bool))
+        else:
+            nb_pixels = roi_gris.size
         if nb_pixels == 0:
             return None
         ratio_papier = np.count_nonzero(masque_papier) / nb_pixels
+
+        # QW1: si le mask filtre une detection qui serait positive sans lui, on log
+        if (
+            mask_inclus is not None
+            and ratio_papier_unmasked > self.imprimante_seuil_changement
+            and ratio_papier <= self.imprimante_seuil_changement
+        ):
+            logger.info(
+                f"[QW1] Detection filtree par mask: ratio non-masque "
+                f"{ratio_papier_unmasked:.1%} > seuil, ratio masque "
+                f"{ratio_papier:.1%} <= seuil"
+            )
 
         # Pre-detection brute (1 seule frame). On confirmera avec le compteur
         # consecutif ci-dessous pour eviter les declenchements sur 1 frame
@@ -471,7 +513,8 @@ class AnalyseurCaisse:
             raison = f"{ratio_papier:.1%} pixels blancs nouveaux"
 
         # Methode complementaire: detecter un objet blanc allonge (ticket)
-        # Chercher des pixels blancs en bande verticale (ticket = rectangle blanc etroit)
+        # Chercher des pixels blancs en bande verticale (ticket = rectangle blanc etroit).
+        # masque_blanc deja masque par mask_inclus ci-dessus si QW1 actif.
         if not detecte_brut:
             nb_blancs = np.count_nonzero(masque_blanc)
             ratio_blanc = nb_blancs / nb_pixels
@@ -575,6 +618,46 @@ class AnalyseurCaisse:
                 return True
 
         return False
+
+    def _obtenir_mask_imprimante(self, roi_shape: Tuple[int, int]) -> Optional[np.ndarray]:
+        """
+        QW1: Retourne le masque binaire (uint8, 0/1) de la zone d'inclusion dans
+        la ROI. Les pixels a 1 sont pris en compte dans la detection, ceux a 0
+        sont exclus (zone ou la main du caissier passe regulierement).
+
+        Cache le masque tant que la shape de ROI ne change pas. None si pas de
+        polygone configure.
+        """
+        if not self._imprimante_mask_polygon:
+            return None
+        if self._imprimante_mask is not None and self._imprimante_mask_shape == roi_shape:
+            return self._imprimante_mask
+
+        import cv2
+        h, w = roi_shape
+        mask = np.zeros((h, w), dtype=np.uint8)
+        try:
+            pts = np.array(
+                [
+                    (int(round(max(0.0, min(1.0, x)) * (w - 1))),
+                     int(round(max(0.0, min(1.0, y)) * (h - 1))))
+                    for x, y in self._imprimante_mask_polygon
+                ],
+                dtype=np.int32,
+            )
+            if len(pts) >= 3:
+                cv2.fillPoly(mask, [pts], 1)
+        except (TypeError, ValueError) as e:
+            logger.warning(f"[QW1] Polygone invalide ({e}), fallback ROI complete")
+            mask[:, :] = 1
+        self._imprimante_mask = mask
+        self._imprimante_mask_shape = roi_shape
+        ratio_inclus = float(mask.mean())
+        logger.info(
+            f"[QW1] Mask binaire calcule pour ROI {w}x{h}: "
+            f"{ratio_inclus:.0%} des pixels inclus dans la detection"
+        )
+        return mask
 
     def _obtenir_roi_imprimante(self, taille_frame: Tuple[int, int]) -> Tuple[int, int, int, int]:
         """Retourne les coordonnees (x1,y1,x2,y2) de la zone imprimante."""

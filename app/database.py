@@ -280,6 +280,7 @@ class BaseDonneesFraude:
                 ("caisse_nb_cycles_scan_min", "2", "caisse", "Nombre min de cycles extension-retraction douchette pour detecter un scan", "int"),
                 ("imprimante_seuil_blanc", "200", "caisse", "Luminosite min pour detecter le papier ticket (0-255)", "int"),
                 ("imprimante_seuil_changement", "0.15", "caisse", "% min de pixels changes pour detecter le papier", "float"),
+                ("imprimante_mask_polygon", "", "caisse", "Polygone (JSON liste [x,y] en %% de la ROI, 0.0-1.0) excluant la zone main du caissier. Vide=ROI complete.", "str"),
                 ("caisse_detecter_transaction_fantome", "true", "caisse", "Activer la detection de transaction fantome (ticket imprime sans client)", "bool"),
                 ("mannequin_seuil_immobilite_sec", "30", "detection", "Duree d'immobilite (sec) avant de considerer une piste comme mannequin", "float"),
                 # Vol - Cacher article sous vetements

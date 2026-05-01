@@ -5,12 +5,13 @@ avec ses propres instances de tracker, analyseur et enregistreur.
 Les modeles YOLO et la base de donnees sont partages (thread-safe).
 """
 
+import json
 import logging
 import os
 import threading
 import time
 from contextlib import contextmanager
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -120,6 +121,9 @@ class CameraWorker:
         self._zones_exclusion_pct = []
         self._charger_zones_exclusion(db)
 
+        # QW1: polygone de masque imprimante (JSON, ROI-relatif)
+        imprimante_mask_polygon = self._charger_imprimante_mask(db)
+
         # Charger les params caisse depuis la DB
         self.analyseur_caisse = AnalyseurCaisse(
             timeout_ticket_secondes=float(db.obtenir_parametre("caisse_timeout_ticket", 12.0)),
@@ -132,6 +136,7 @@ class CameraWorker:
             imprimante_seuil_blanc=int(db.obtenir_parametre("imprimante_seuil_blanc", 200)),
             imprimante_seuil_changement=float(db.obtenir_parametre("imprimante_seuil_changement", 0.15)),
             imprimante_bbox=self._imprimante_bbox,
+            imprimante_mask_polygon=imprimante_mask_polygon,
             detecter_transaction_fantome=bool(db.obtenir_parametre("caisse_detecter_transaction_fantome", True)),
         )
 
@@ -249,6 +254,33 @@ class CameraWorker:
     # ------------------------------------------------------------------
     # Boucle principale
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _charger_imprimante_mask(db: BaseDonneesFraude) -> Optional[List[Tuple[float, float]]]:
+        """QW1: charge le polygone mask imprimante depuis la DB (JSON string).
+
+        Format attendu: liste de [x, y] en proportions de la ROI (0.0-1.0).
+        Retourne None si vide, mal forme, ou < 3 points.
+        """
+        raw = db.obtenir_parametre("imprimante_mask_polygon", "")
+        if not raw or not isinstance(raw, str):
+            return None
+        raw = raw.strip()
+        if not raw:
+            return None
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError as e:
+            logger.warning(f"[QW1] imprimante_mask_polygon invalide (JSON): {e}")
+            return None
+        if not isinstance(data, list) or len(data) < 3:
+            logger.warning(f"[QW1] imprimante_mask_polygon doit etre une liste de >=3 points")
+            return None
+        try:
+            return [(float(p[0]), float(p[1])) for p in data]
+        except (TypeError, ValueError, IndexError) as e:
+            logger.warning(f"[QW1] imprimante_mask_polygon: points mal formes ({e})")
+            return None
 
     def _ouvrir_source(self) -> Optional[cv2.VideoCapture]:
         """Ouvre la source video avec config RTSP optimisee."""
