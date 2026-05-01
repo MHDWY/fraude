@@ -879,16 +879,15 @@ class AnalyseurCaisse:
         if maintenant - self._drift_last_check_ts < self._drift_check_interval:
             return
 
-        # Skip si detection ticket recente (frame contient peut-etre du papier)
-        if (
-            self._imprimante_last_detection_ts > 0
-            and (maintenant - self._imprimante_last_detection_ts) < 10.0
-        ):
+        # Skip uniquement si la frame courante a une detection positive
+        # (papier potentiellement dans le slot CETTE frame). Sur la frame
+        # suivante ou` _ticket_visuel_cette_frame est False, le check tournera.
+        # On ne met PAS a jour _drift_last_check_ts ici, sinon le check
+        # serait reporte de 5 min au lieu de retenter au prochain frame.
+        if self._ticket_visuel_cette_frame is True:
             logger.info(
-                f"[DRIFT] check skip: detection ticket il y a "
-                f"{maintenant - self._imprimante_last_detection_ts:.1f}s (<10s)"
+                "[DRIFT] check skip: ticket visuel positif cette frame, retry next frame"
             )
-            self._drift_last_check_ts = maintenant
             return
 
         # 1er passage: lazy-load ou capture la ref, et sort
