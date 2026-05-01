@@ -754,32 +754,12 @@ class AnalyseurCaisse:
                 except Exception as e:
                     logger.warning(f"[IMPRIMANTE OBS] Echec sauvegarde snapshot: {e}")
 
-            # Alerte TICKET_SANS_CLIENT directement depuis l'OBS
-            # (fonctionne meme sans caissier identifie dans la state machine)
-            if self.detecter_transaction_fantome:
-                ticket_attendu_par_sm = any(
-                    tx.etat in (EtatTransaction.ATTENTE_TICKET, EtatTransaction.TICKET_IMPRIME)
-                    for tx in self._transactions.values()
-                )
-                if not ticket_attendu_par_sm:
-                    has_client = any(
-                        p for p in pistes
-                        if p.etat == "actif"
-                        and p.id_piste not in self._caissiers_potentiels
-                        and self._est_dans_zone_caisse(p.centre, taille_frame)
-                    )
-                    if not has_client:
-                        cle = (-1, TypeAlerteCaisse.TICKET_SANS_CLIENT.value)
-                        if cle not in self._derniere_alerte or maintenant - self._derniere_alerte[cle] >= self.cooldown:
-                            self._derniere_alerte[cle] = maintenant
-                            alertes.append(AlerteCaisse(
-                                type_alerte=TypeAlerteCaisse.TICKET_SANS_CLIENT,
-                                confiance=0.80,
-                                id_caissier=-1,
-                                id_client=None,
-                                description=DESCRIPTIONS_ALERTES_CAISSE[TypeAlerteCaisse.TICKET_SANS_CLIENT],
-                            ))
-                            logger.warning("ALERTE: Ticket sans client (detection visuelle OBS)")
+            # Note: TICKET_SANS_CLIENT n'est PAS genere ici depuis l'OBS.
+            # YOLO ne detecte pas fiablement les personnes depuis l'angle caisse
+            # (souvent 0 pistes actives alors que des clients sont presents),
+            # ce qui causait des faux positifs toutes les 30 secondes.
+            # L'alerte TICKET_SANS_CLIENT est geree uniquement par la state machine
+            # (quand un caissier EST identifie mais qu'aucun client n'a ete vu).
 
         # 1. Identifier les caissiers
         ids_caissiers = self._identifier_caissiers(pistes, taille_frame)
