@@ -137,6 +137,9 @@ class CameraWorker:
             imprimante_seuil_changement=float(db.obtenir_parametre("imprimante_seuil_changement", 0.15)),
             imprimante_bbox=self._imprimante_bbox,
             imprimante_mask_polygon=imprimante_mask_polygon,
+            imprimante_mode_detection=str(db.obtenir_parametre("imprimante_mode_detection", "hsv")),
+            imprimante_seuil_saturation=int(db.obtenir_parametre("imprimante_seuil_saturation", 40)),
+            imprimante_seuil_valeur=int(db.obtenir_parametre("imprimante_seuil_valeur", 180)),
             detecter_transaction_fantome=bool(db.obtenir_parametre("caisse_detecter_transaction_fantome", True)),
         )
 

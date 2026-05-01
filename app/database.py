@@ -281,6 +281,9 @@ class BaseDonneesFraude:
                 ("imprimante_seuil_blanc", "200", "caisse", "Luminosite min pour detecter le papier ticket (0-255)", "int"),
                 ("imprimante_seuil_changement", "0.15", "caisse", "% min de pixels changes pour detecter le papier", "float"),
                 ("imprimante_mask_polygon", "", "caisse", "Polygone (JSON liste [x,y] en %% de la ROI, 0.0-1.0) excluant la zone main du caissier. Vide=ROI complete.", "str"),
+                ("imprimante_mode_detection", "hsv", "caisse", "Mode de classification 'pixel blanc' dans la ROI imprimante: 'hsv' (S faible + V eleve) ou 'gray' (luminance > seuil).", "str"),
+                ("imprimante_seuil_saturation", "40", "caisse", "Mode HSV: saturation MAX (0-255) pour considerer un pixel comme blanc/papier. Plus bas = plus strict.", "int"),
+                ("imprimante_seuil_valeur", "180", "caisse", "Mode HSV: valeur (luminosite) MIN (0-255) pour considerer un pixel comme blanc/papier.", "int"),
                 ("caisse_detecter_transaction_fantome", "true", "caisse", "Activer la detection de transaction fantome (ticket imprime sans client)", "bool"),
                 ("mannequin_seuil_immobilite_sec", "30", "detection", "Duree d'immobilite (sec) avant de considerer une piste comme mannequin", "float"),
                 # Vol - Cacher article sous vetements

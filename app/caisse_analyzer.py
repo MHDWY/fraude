@@ -117,6 +117,9 @@ class AnalyseurCaisse:
         imprimante_seuil_changement: float = 0.15,
         imprimante_bbox: Optional[tuple] = None,
         imprimante_mask_polygon: Optional[List[Tuple[float, float]]] = None,
+        imprimante_mode_detection: str = "hsv",
+        imprimante_seuil_saturation: int = 40,
+        imprimante_seuil_valeur: int = 180,
         detecter_transaction_fantome: bool = True,
     ):
         """
@@ -135,6 +138,10 @@ class AnalyseurCaisse:
                                      definissant les pixels A INCLURE dans la detection.
                                      Permet d'exclure la zone ou la main du caissier passe regulierement.
                                      None ou vide = ROI complete (comportement legacy).
+            imprimante_mode_detection: 'hsv' (S<seuil_sat ET V>seuil_val) ou 'gray'
+                                       (luminance > seuil_blanc, comportement legacy).
+            imprimante_seuil_saturation: mode HSV uniquement, S MAX (0-255), defaut 40.
+            imprimante_seuil_valeur: mode HSV uniquement, V MIN (0-255), defaut 180.
         """
         self.timeout_ticket = timeout_ticket_secondes
         self.zone_caisse_y_min_pct = zone_caisse_y_min_pct
@@ -148,8 +155,23 @@ class AnalyseurCaisse:
         self.imprimante_seuil_blanc = imprimante_seuil_blanc
         self.imprimante_seuil_changement = imprimante_seuil_changement
         self._imprimante_configuree = imprimante_bbox is not None
+        # QW2: mode de classification "pixel blanc" dans la ROI
+        mode = (imprimante_mode_detection or "hsv").strip().lower()
+        if mode not in ("hsv", "gray"):
+            logger.warning(
+                f"[QW2] mode_detection inconnu '{mode}', fallback 'hsv'"
+            )
+            mode = "hsv"
+        self.imprimante_mode_detection = mode
+        self.imprimante_seuil_saturation = max(0, min(255, int(imprimante_seuil_saturation)))
+        self.imprimante_seuil_valeur = max(0, min(255, int(imprimante_seuil_valeur)))
         if imprimante_bbox:
-            logger.info(f"Imprimante configuree via objets_reference: bbox={imprimante_bbox}")
+            logger.info(
+                f"Imprimante configuree via objets_reference: bbox={imprimante_bbox}, "
+                f"mode={self.imprimante_mode_detection} "
+                f"(S<{self.imprimante_seuil_saturation}, V>{self.imprimante_seuil_valeur} "
+                f"si HSV; gris>{self.imprimante_seuil_blanc} si gray)"
+            )
 
         # QW1: polygone de masque (ROI-relatif) pour exclure la zone main du caissier.
         # Stocke comme liste de tuples (x_pct, y_pct), 0.0-1.0. Vide = ROI complete.
@@ -467,10 +489,31 @@ class AnalyseurCaisse:
                 self._imprimante_ref_ts = maintenant
                 return None
 
-        # Pixels qui ont significativement change ET sont devenus clairs (papier blanc)
+        # Pixels qui ont significativement change ET sont devenus clairs (papier blanc).
+        # QW2: classification "blanc" via HSV (defaut) ou luminance grayscale (legacy).
         masque_change = diff > 30  # Changement significatif
-        masque_blanc = roi_gris > self.imprimante_seuil_blanc  # Pixel clair
+        if self.imprimante_mode_detection == "hsv":
+            roi_hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+            sat = roi_hsv[..., 1]
+            val = roi_hsv[..., 2]
+            masque_blanc = (sat < self.imprimante_seuil_saturation) & (
+                val > self.imprimante_seuil_valeur
+            )
+        else:
+            masque_blanc = roi_gris > self.imprimante_seuil_blanc
         masque_papier = masque_change & masque_blanc
+
+        # QW2: pour telemetrie, calculer aussi le ratio que le mode 'gray' aurait
+        # donne (avec le seuil_blanc legacy). Permet de mesurer si HSV filtre des
+        # candidats que gray aurait acceptes. Cout negligeable.
+        if self.imprimante_mode_detection == "hsv":
+            masque_blanc_gray_eq = roi_gris > self.imprimante_seuil_blanc
+            masque_papier_gray_eq = masque_change & masque_blanc_gray_eq
+            ratio_papier_gray_eq = float(
+                np.count_nonzero(masque_papier_gray_eq) / max(roi_gris.size, 1)
+            )
+        else:
+            ratio_papier_gray_eq = None
 
         # QW1: appliquer le masque de polygone (exclure zone main caissier).
         # On sauvegarde le ratio non-masque pour logger l'impact du QW1 a posteriori.
@@ -500,6 +543,19 @@ class AnalyseurCaisse:
                 f"[QW1] Detection filtree par mask: ratio non-masque "
                 f"{ratio_papier_unmasked:.1%} > seuil, ratio masque "
                 f"{ratio_papier:.1%} <= seuil"
+            )
+
+        # QW2: si HSV filtre une detection que gray aurait laissee passer, on log
+        if (
+            ratio_papier_gray_eq is not None
+            and ratio_papier_gray_eq > self.imprimante_seuil_changement
+            and ratio_papier <= self.imprimante_seuil_changement
+        ):
+            logger.info(
+                f"[QW2] Detection filtree par mode HSV: gray-equivalent "
+                f"{ratio_papier_gray_eq:.1%} > seuil, HSV "
+                f"{ratio_papier:.1%} <= seuil "
+                f"(S<{self.imprimante_seuil_saturation}, V>{self.imprimante_seuil_valeur})"
             )
 
         # Pre-detection brute (1 seule frame). On confirmera avec le compteur
