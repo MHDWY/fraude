@@ -17,7 +17,7 @@ import time
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -122,6 +122,12 @@ class AnalyseurCaisse:
         imprimante_seuil_valeur: int = 180,
         imprimante_min_frames_consecutives: int = 2,
         imprimante_cooldown_detection: float = 4.0,
+        imprimante_drift_enabled: bool = True,
+        imprimante_drift_check_interval: int = 300,
+        imprimante_drift_threshold: float = 0.70,
+        imprimante_drift_consecutive: int = 3,
+        imprimante_drift_cooldown: int = 3600,
+        imprimante_drift_dir: str = "/opt/fraude/snapshots/imprimante_drift",
         detecter_transaction_fantome: bool = True,
     ):
         """
@@ -148,6 +154,12 @@ class AnalyseurCaisse:
                                                  pour confirmer une detection (defaut 2).
             imprimante_cooldown_detection: cooldown (s) entre 2 detections positives
                                            du papier imprimante (defaut 4.0).
+            imprimante_drift_enabled: active la detection drift (deplacement physique).
+            imprimante_drift_check_interval: intervalle (s) entre checks (defaut 300=5min).
+            imprimante_drift_threshold: seuil score (0-1) sous lequel le check echoue.
+            imprimante_drift_consecutive: checks consecutifs sous seuil pour alerte (defaut 3).
+            imprimante_drift_cooldown: cooldown (s) entre alertes drift envoyees (defaut 3600=1h).
+            imprimante_drift_dir: repertoire pour reference + snapshots drift.
         """
         self.timeout_ticket = timeout_ticket_secondes
         self.zone_caisse_y_min_pct = zone_caisse_y_min_pct
@@ -214,6 +226,29 @@ class AnalyseurCaisse:
         # Timestamp du dernier snapshot OBS sauvegarde (cooldown anti-spam)
         self._imprimante_obs_last_snapshot_ts: float = 0.0
         self._imprimante_obs_snapshot_cooldown: float = 10.0  # secondes
+
+        # === Drift detection (deplacement physique de l'imprimante) ===
+        # Compare periodiquement la ROI courante (au repos) a une reference
+        # ancree, anchored au calibrage initial. Indep du _imprimante_ref qui
+        # se rafraichit pour la detection ticket et serait corrompu par un drift.
+        self._drift_enabled = bool(imprimante_drift_enabled)
+        self._drift_check_interval = max(60, int(imprimante_drift_check_interval))
+        self._drift_threshold = max(0.0, min(1.0, float(imprimante_drift_threshold)))
+        self._drift_consecutive_required = max(1, int(imprimante_drift_consecutive))
+        self._drift_cooldown = max(60, int(imprimante_drift_cooldown))
+        self._drift_dir = str(imprimante_drift_dir)
+        self._drift_ref_path = f"{self._drift_dir}/reference.jpg"
+        self._drift_ref_frame: Optional[np.ndarray] = None
+        self._drift_last_check_ts: float = 0.0
+        self._drift_consecutive_count: int = 0
+        self._drift_last_alert_ts: float = 0.0
+        self._drift_alert_callback: Optional[Callable[[float, str, str], bool]] = None
+        if self._drift_enabled and imprimante_bbox:
+            logger.info(
+                f"[DRIFT] detection drift activee: interval={self._drift_check_interval}s "
+                f"seuil={self._drift_threshold} consecutif={self._drift_consecutive_required} "
+                f"cooldown={self._drift_cooldown}s ref={self._drift_ref_path}"
+            )
         self.nb_cycles_scan_min = nb_cycles_scan_min
         self.cooldown = cooldown_secondes
         self.detecter_transaction_fantome = detecter_transaction_fantome
@@ -744,6 +779,271 @@ class AnalyseurCaisse:
         )
         return mask
 
+    # ------------------------------------------------------------------
+    # Drift detection (deplacement physique imprimante)
+    # ------------------------------------------------------------------
+
+    def configurer_drift_callback(
+        self, callback: Callable[[float, str, str], bool]
+    ) -> None:
+        """Injection du callback Telegram pour les alertes drift.
+
+        Signature: (score: float, chemin_image: str, ts: str) -> bool
+        Retourne True si l'envoi a reussi (cooldown demarre), False sinon
+        (retry au prochain check, cooldown ne demarre pas).
+        """
+        self._drift_alert_callback = callback
+
+    @staticmethod
+    def _calculer_score_drift(
+        ref: Optional[np.ndarray],
+        current: Optional[np.ndarray],
+    ) -> float:
+        """Score de similarite entre deux ROI (0..1, 1=identique).
+
+        Utilise cv2.matchTemplate(TM_CCOEFF_NORMED) qui fait une correlation
+        normalisee (insensible aux variations d'eclairage uniforme mais sensible
+        aux deplacements spatiaux). Retourne -1.0 si entree invalide.
+        Fonction publique-statique pour test unitaire isole.
+        """
+        if ref is None or current is None:
+            return -1.0
+        if ref.size == 0 or current.size == 0:
+            return -1.0
+        if ref.shape[:2] != current.shape[:2]:
+            return -1.0
+        import cv2
+        ref_g = cv2.cvtColor(ref, cv2.COLOR_BGR2GRAY) if ref.ndim == 3 else ref
+        cur_g = cv2.cvtColor(current, cv2.COLOR_BGR2GRAY) if current.ndim == 3 else current
+        try:
+            res = cv2.matchTemplate(cur_g, ref_g, cv2.TM_CCOEFF_NORMED)
+        except cv2.error:
+            return -1.0
+        return float(res[0][0])
+
+    def _charger_ou_capturer_ref_drift(
+        self, frame: np.ndarray, taille_frame: Tuple[int, int]
+    ) -> bool:
+        """Initialise self._drift_ref_frame depuis disque ou capture la ROI courante.
+
+        Retourne True si la ref est prete, False sinon.
+        """
+        import os, cv2
+        try:
+            os.makedirs(self._drift_dir, exist_ok=True)
+        except OSError as e:
+            logger.warning(f"[DRIFT] impossible de creer {self._drift_dir}: {e}")
+            return False
+
+        if os.path.exists(self._drift_ref_path):
+            loaded = cv2.imread(self._drift_ref_path)
+            if loaded is not None and loaded.size > 0:
+                self._drift_ref_frame = loaded
+                logger.info(
+                    f"[DRIFT] reference chargee depuis disque: {self._drift_ref_path} "
+                    f"({loaded.shape[1]}x{loaded.shape[0]})"
+                )
+                return True
+            logger.warning(f"[DRIFT] ref disque invalide ({self._drift_ref_path}), recapture")
+
+        x1, y1, x2, y2 = self._obtenir_roi_imprimante(taille_frame)
+        if x2 - x1 < 10 or y2 - y1 < 10:
+            return False
+        roi = frame[y1:y2, x1:x2].copy()
+        try:
+            cv2.imwrite(self._drift_ref_path, roi, [cv2.IMWRITE_JPEG_QUALITY, 95])
+        except Exception as e:
+            logger.warning(f"[DRIFT] echec ecriture ref: {e}")
+        self._drift_ref_frame = roi
+        logger.info(
+            f"[DRIFT] reference capturee depuis frame courante "
+            f"({roi.shape[1]}x{roi.shape[0]}) -> {self._drift_ref_path}"
+        )
+        return True
+
+    def _verifier_drift_imprimante(
+        self, frame: np.ndarray, taille_frame: Tuple[int, int], maintenant: float
+    ) -> None:
+        """Check periodique du drift (deplacement physique de l'imprimante).
+
+        Appele depuis analyser() a chaque frame mais ne fait du travail que
+        si l'intervalle (5 min par defaut) est ecoule depuis le dernier check.
+        Skip si une detection ticket recente est en cours.
+        """
+        if not self._drift_enabled or not self._imprimante_configuree:
+            return
+        if frame is None:
+            return
+
+        # Throttle a l'intervalle configure
+        if maintenant - self._drift_last_check_ts < self._drift_check_interval:
+            return
+
+        # Skip si detection ticket recente (frame contient peut-etre du papier)
+        if (
+            self._imprimante_last_detection_ts > 0
+            and (maintenant - self._imprimante_last_detection_ts) < 10.0
+        ):
+            logger.info(
+                f"[DRIFT] check skip: detection ticket il y a "
+                f"{maintenant - self._imprimante_last_detection_ts:.1f}s (<10s)"
+            )
+            self._drift_last_check_ts = maintenant
+            return
+
+        # 1er passage: lazy-load ou capture la ref, et sort
+        if self._drift_ref_frame is None:
+            if self._charger_ou_capturer_ref_drift(frame, taille_frame):
+                self._drift_last_check_ts = maintenant
+            return
+
+        # Extraire ROI courante et calculer score
+        x1, y1, x2, y2 = self._obtenir_roi_imprimante(taille_frame)
+        if x2 - x1 < 10 or y2 - y1 < 10:
+            return
+        roi_current = frame[y1:y2, x1:x2]
+        score = self._calculer_score_drift(self._drift_ref_frame, roi_current)
+        self._drift_last_check_ts = maintenant
+
+        if score < 0:
+            logger.warning(
+                f"[DRIFT] score invalide (ref shape={self._drift_ref_frame.shape}, "
+                f"current shape={roi_current.shape}); skip"
+            )
+            return
+
+        if score < self._drift_threshold:
+            self._drift_consecutive_count += 1
+            logger.info(
+                f"[DRIFT] score={score:.3f} < seuil {self._drift_threshold} "
+                f"(consecutif {self._drift_consecutive_count}/{self._drift_consecutive_required})"
+            )
+            if self._drift_consecutive_count >= self._drift_consecutive_required:
+                self._declencher_alerte_drift(roi_current, score, maintenant)
+        else:
+            if self._drift_consecutive_count > 0:
+                logger.info(
+                    f"[DRIFT] score={score:.3f} >= seuil, "
+                    f"reset compteur (etait {self._drift_consecutive_count})"
+                )
+            else:
+                logger.info(f"[DRIFT] score={score:.3f} OK (>= seuil {self._drift_threshold})")
+            self._drift_consecutive_count = 0
+
+    def _declencher_alerte_drift(
+        self, roi_current: np.ndarray, score: float, maintenant: float
+    ) -> None:
+        """Sauve snapshots avant/apres + appelle callback Telegram (avec cooldown).
+
+        Si l'envoi Telegram echoue, le cooldown ne demarre pas et on retentera
+        au prochain check. Le compteur consecutif est aussi conserve dans ce
+        cas pour que le prochain check sous-seuil retrigge l'alerte immediatement.
+        """
+        # Cooldown 1h entre 2 alertes envoyees avec succes
+        if (
+            self._drift_last_alert_ts > 0
+            and (maintenant - self._drift_last_alert_ts) < self._drift_cooldown
+        ):
+            restant = self._drift_cooldown - (maintenant - self._drift_last_alert_ts)
+            logger.info(
+                f"[DRIFT] alerte etouffee par cooldown 1h "
+                f"(reste {restant:.0f}s)"
+            )
+            return
+
+        # Sauvegarde snapshots avant/apres
+        import os, cv2
+        try:
+            os.makedirs(self._drift_dir, exist_ok=True)
+        except OSError:
+            pass
+
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        path_current = f"{self._drift_dir}/drift_{ts}_current.jpg"
+        path_ref = f"{self._drift_dir}/drift_{ts}_ref.jpg"
+        path_compare = f"{self._drift_dir}/drift_{ts}_compare.jpg"
+
+        try:
+            cv2.imwrite(path_current, roi_current, [cv2.IMWRITE_JPEG_QUALITY, 90])
+            cv2.imwrite(path_ref, self._drift_ref_frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
+            self._construire_image_comparaison(self._drift_ref_frame, roi_current, score, path_compare)
+        except Exception as e:
+            logger.error(f"[DRIFT] echec ecriture snapshots: {e}")
+            path_compare = ""
+
+        logger.warning(
+            f"[DRIFT] ALERTE: imprimante deplacee suspectee, score={score:.3f} "
+            f"< seuil {self._drift_threshold} apres {self._drift_consecutive_required} "
+            f"checks consecutifs (~{self._drift_consecutive_required * self._drift_check_interval}s). "
+            f"Compare: {path_compare or path_current}"
+        )
+
+        # Rotation snapshots (garde 50 derniers)
+        self._rotation_snapshots_drift(max_par_pattern=50)
+
+        # Telegram via callback
+        envoi_ok = False
+        if self._drift_alert_callback and path_compare:
+            try:
+                envoi_ok = bool(self._drift_alert_callback(score, path_compare, ts))
+            except Exception as e:
+                logger.error(f"[DRIFT] callback Telegram exception: {e}")
+                envoi_ok = False
+        elif not self._drift_alert_callback:
+            logger.warning("[DRIFT] aucun callback Telegram configure, alerte loggee localement uniquement")
+
+        if envoi_ok:
+            self._drift_last_alert_ts = maintenant
+            self._drift_consecutive_count = 0
+            logger.info("[DRIFT] alerte envoyee, cooldown 1h demarre")
+        else:
+            logger.warning(
+                "[DRIFT] envoi Telegram echec/absent, alerte sera retentee au prochain check "
+                "(cooldown non demarre, compteur consecutif conserve)"
+            )
+
+    @staticmethod
+    def _construire_image_comparaison(
+        ref: np.ndarray, current: np.ndarray, score: float, output_path: str
+    ) -> None:
+        """Cree une image side-by-side ref|current avec labels et score."""
+        import cv2
+        h_ref, w_ref = ref.shape[:2]
+        h_cur, w_cur = current.shape[:2]
+        h = max(h_ref, h_cur)
+        gap = 12
+        header = 30
+        footer = 24
+        w_total = w_ref + w_cur + gap
+        combined = np.full((h + header + footer, w_total, 3), 240, dtype=np.uint8)
+        combined[header:header + h_ref, :w_ref] = ref if ref.ndim == 3 else cv2.cvtColor(ref, cv2.COLOR_GRAY2BGR)
+        combined[header:header + h_cur, w_ref + gap:] = (
+            current if current.ndim == 3 else cv2.cvtColor(current, cv2.COLOR_GRAY2BGR)
+        )
+        cv2.putText(combined, "REFERENCE", (4, header - 8),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1, cv2.LINE_AA)
+        cv2.putText(combined, "ACTUEL", (w_ref + gap + 4, header - 8),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1, cv2.LINE_AA)
+        cv2.putText(combined, f"score={score:.3f}",
+                    (4, header + h + 18),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 200), 1, cv2.LINE_AA)
+        cv2.imwrite(output_path, combined, [cv2.IMWRITE_JPEG_QUALITY, 85])
+
+    def _rotation_snapshots_drift(self, max_par_pattern: int = 50) -> None:
+        """Garde uniquement les N derniers fichiers (par pattern)."""
+        import os, glob
+        for pattern in ("drift_*_current.jpg", "drift_*_ref.jpg", "drift_*_compare.jpg"):
+            try:
+                files = sorted(glob.glob(f"{self._drift_dir}/{pattern}"))
+            except OSError:
+                continue
+            if len(files) > max_par_pattern:
+                for old in files[: -max_par_pattern]:
+                    try:
+                        os.remove(old)
+                    except OSError:
+                        pass
+
     def _obtenir_roi_imprimante(self, taille_frame: Tuple[int, int]) -> Tuple[int, int, int, int]:
         """Retourne les coordonnees (x1,y1,x2,y2) de la zone imprimante."""
         h, w = taille_frame
@@ -928,6 +1228,11 @@ class AnalyseurCaisse:
             # ce qui causait des faux positifs toutes les 30 secondes.
             # L'alerte TICKET_SANS_CLIENT est geree uniquement par la state machine
             # (quand un caissier EST identifie mais qu'aucun client n'a ete vu).
+
+        # === DRIFT CHECK (deplacement physique imprimante) ===
+        # Throttle interne (5 min par defaut), aucun cout si pas l'heure.
+        if self._imprimante_configuree and frame is not None:
+            self._verifier_drift_imprimante(frame, taille_frame, maintenant)
 
         # 1. Identifier les caissiers
         ids_caissiers = self._identifier_caissiers(pistes, taille_frame)

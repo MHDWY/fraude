@@ -142,8 +142,20 @@ class CameraWorker:
             imprimante_seuil_valeur=int(db.obtenir_parametre("imprimante_seuil_valeur", 180)),
             imprimante_min_frames_consecutives=int(db.obtenir_parametre("imprimante_min_frames_consecutives", 2)),
             imprimante_cooldown_detection=float(db.obtenir_parametre("imprimante_cooldown_detection", 4.0)),
+            imprimante_drift_enabled=bool(db.obtenir_parametre("imprimante_drift_enabled", True)),
+            imprimante_drift_check_interval=int(db.obtenir_parametre("imprimante_drift_check_interval", 300)),
+            imprimante_drift_threshold=float(db.obtenir_parametre("imprimante_drift_threshold", 0.70)),
+            imprimante_drift_consecutive=int(db.obtenir_parametre("imprimante_drift_consecutive", 3)),
+            imprimante_drift_cooldown=int(db.obtenir_parametre("imprimante_drift_cooldown", 3600)),
             detecter_transaction_fantome=bool(db.obtenir_parametre("caisse_detecter_transaction_fantome", True)),
         )
+
+        # Wire callback Telegram pour les alertes drift imprimante
+        # Synchrone (drift max 1x/h) — retourne True si envoi a reussi.
+        if self.alertes_manager is not None:
+            self.analyseur_caisse.configurer_drift_callback(
+                self._drift_envoyer_telegram
+            )
 
         # Enregistreur video specifique a cette camera
         cam_slug = camera_nom.replace(" ", "_").lower()[:20]
@@ -259,6 +271,39 @@ class CameraWorker:
     # ------------------------------------------------------------------
     # Boucle principale
     # ------------------------------------------------------------------
+
+    def _drift_envoyer_telegram(
+        self, score: float, chemin_image: str, ts: str
+    ) -> bool:
+        """Callback synchrone pour les alertes drift imprimante.
+
+        Retourne True si Telegram a accepte au moins 1 destinataire (cooldown
+        demarre cote analyseur). Si False, le compteur consecutif et le
+        cooldown ne sont pas reset, et on re-essaiera au prochain check 5min.
+        """
+        if self.alertes_manager is None:
+            return False
+        try:
+            chat_ids = self.alertes_manager._obtenir_destinataires_telegram(self.camera_id)
+        except Exception as e:
+            logger.warning(f"[DRIFT] resolution destinataires echouee: {e}")
+            chat_ids = None
+
+        text = (
+            f"⚠️ *DRIFT IMPRIMANTE — {self.camera_nom}*\n\n"
+            f"L'imprimante semble avoir ete deplacee.\n"
+            f"Score similarite: `{score:.3f}` (seuil "
+            f"{self.analyseur_caisse._drift_threshold:.2f})\n"
+            f"Heure: `{ts}`\n\n"
+            f"_Recalibrage requis. Voir guide_:\n"
+            f"`ssh fraude 'rm /opt/fraude/snapshots/imprimante_drift/reference.jpg "
+            f"&& cd /opt/fraude && docker compose restart fraud-detector'`"
+        )
+        return self.alertes_manager.envoyer_message_telegram(
+            text=text,
+            chemin_photo=chemin_image,
+            chat_ids=chat_ids,
+        )
 
     @staticmethod
     def _charger_imprimante_mask(db: BaseDonneesFraude) -> Optional[List[Tuple[float, float]]]:

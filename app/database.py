@@ -286,6 +286,11 @@ class BaseDonneesFraude:
                 ("imprimante_seuil_valeur", "180", "caisse", "Mode HSV: valeur (luminosite) MIN (0-255) pour considerer un pixel comme blanc/papier.", "int"),
                 ("imprimante_min_frames_consecutives", "2", "caisse", "Nombre de frames consecutives positives pour confirmer une detection ticket. 1=relax, 2=strict (filtre glitches HEVC).", "int"),
                 ("imprimante_cooldown_detection", "4.0", "caisse", "Cooldown (s) entre 2 detections positives consecutives du papier imprimante. Independant du cooldown OBS snapshot.", "float"),
+                ("imprimante_drift_enabled", "true", "caisse", "Active la detection de deplacement physique de l'imprimante (drift) avec alerte Telegram.", "bool"),
+                ("imprimante_drift_check_interval", "300", "caisse", "Intervalle (s) entre 2 checks de drift de l'imprimante.", "int"),
+                ("imprimante_drift_threshold", "0.70", "caisse", "Seuil de score de similarite (0-1) sous lequel un check est considere drift. Plus bas = plus tolerant.", "float"),
+                ("imprimante_drift_consecutive", "3", "caisse", "Nombre de checks consecutifs sous seuil pour declencher l'alerte drift.", "int"),
+                ("imprimante_drift_cooldown", "3600", "caisse", "Cooldown (s) entre 2 alertes drift envoyees a Telegram.", "int"),
                 ("caisse_detecter_transaction_fantome", "true", "caisse", "Activer la detection de transaction fantome (ticket imprime sans client)", "bool"),
                 ("mannequin_seuil_immobilite_sec", "30", "detection", "Duree d'immobilite (sec) avant de considerer une piste comme mannequin", "float"),
                 # Vol - Cacher article sous vetements

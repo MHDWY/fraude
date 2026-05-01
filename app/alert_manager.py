@@ -477,6 +477,88 @@ class GestionnaireAlertes:
             msg_err = _masquer_token(str(e), self.config.telegram_bot_token)
             logger.error(f"Erreur envoi video Telegram ({cible}): {msg_err}")
 
+    def envoyer_message_telegram(
+        self,
+        text: str,
+        chemin_photo: Optional[str] = None,
+        chat_ids: Optional[List[str]] = None,
+        parse_mode: str = "Markdown",
+        timeout: int = 15,
+    ) -> bool:
+        """Envoi Telegram generique (texte +/- photo) reutilisable hors flux alerte.
+
+        Synchrone, retourne True si AU MOINS 1 destinataire a recu le message
+        avec succes (status 200). Utilise le meme retry/backoff/rate-limit que
+        _envoyer_telegram. Si chat_ids est None, tombe sur config.telegram_chat_id.
+        """
+        if not self.config.telegram_actif:
+            return False
+        if not self.config.telegram_bot_token:
+            logger.warning("[telegram] envoyer_message_telegram: token absent")
+            return False
+
+        cibles = list(chat_ids) if chat_ids else (
+            [self.config.telegram_chat_id] if self.config.telegram_chat_id else []
+        )
+        if not cibles:
+            logger.warning("[telegram] envoyer_message_telegram: aucun chat_id")
+            return False
+
+        url_base = f"https://api.telegram.org/bot{self.config.telegram_bot_token}"
+        any_success = False
+
+        for cible in cibles:
+            max_retries = 3
+            delay = 2.0
+            for tentative in range(max_retries):
+                try:
+                    if chemin_photo and Path(chemin_photo).exists():
+                        with open(chemin_photo, "rb") as photo:
+                            response = requests.post(
+                                f"{url_base}/sendPhoto",
+                                data={"chat_id": cible, "caption": text, "parse_mode": parse_mode},
+                                files={"photo": photo},
+                                timeout=timeout,
+                            )
+                    else:
+                        response = requests.post(
+                            f"{url_base}/sendMessage",
+                            json={"chat_id": cible, "text": text, "parse_mode": parse_mode},
+                            timeout=timeout,
+                        )
+
+                    if response.status_code == 200:
+                        any_success = True
+                        logger.info(f"[telegram] message envoye a {cible}")
+                        break
+                    if response.status_code == 429:
+                        retry_after = response.json().get("parameters", {}).get("retry_after", delay)
+                        logger.warning(f"[telegram] rate limit, retry dans {retry_after}s")
+                        time.sleep(retry_after)
+                        continue
+                    if response.status_code in (401, 400):
+                        logger.error(f"[telegram] auth/config ({cible}): {response.status_code}")
+                        break
+                    logger.warning(f"[telegram] erreur ({cible}): {response.status_code}")
+                except requests.exceptions.Timeout:
+                    logger.warning(
+                        f"[telegram] timeout ({cible}), tentative {tentative + 1}/{max_retries}"
+                    )
+                except requests.exceptions.ConnectionError as e:
+                    msg_err = _masquer_token(str(e), self.config.telegram_bot_token)
+                    logger.warning(
+                        f"[telegram] connexion echouee ({cible}) tentative {tentative + 1}/{max_retries}: {msg_err}"
+                    )
+                except Exception as e:
+                    msg_err = _masquer_token(str(e), self.config.telegram_bot_token)
+                    logger.error(f"[telegram] erreur inattendue ({cible}): {msg_err}")
+                    break
+                if tentative < max_retries - 1:
+                    time.sleep(delay)
+                    delay *= 2
+
+        return any_success
+
     def _determiner_zone(
         self,
         bbox: Optional[Tuple[int, int, int, int]],
